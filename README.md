@@ -5,17 +5,30 @@ handshake and ChaCha20-Poly1305 packets, called from Kotlin over JNI. It is a st
 mobile [PQConnect](https://www.pqconnect.net) client needs (a system VPN interface, a Rust core
 behind FFI, post-quantum key exchange), not a replacement for it.
 
-```
- Android phone                                              relay (Rust, UDP :51820)
-┌───────────────────────────────────────┐                ┌──────────────────────────┐
-│ ping 10.66.0.1                        │   INIT ──────▶ │ ServerKeys::accept       │
-│   │ kernel routes 10.66.0.0/24 to tun0 │   ◀────── ACK  │   new session + random   │
-│   ▼                                   │                │ Session::open(DATA)      │
-│ TunnelService (VpnService, Kotlin)    │   DATA ──────▶ │   → log the IP packet    │
-│   │ JNI                               │   ◀───── DATA  │   → answer pings to      │
-│   ▼                                   │                │     10.66.0.1            │
-│ tunnel_core (Rust, libtunnel_core.so) │                └──────────────────────────┘
-└───────────────────────────────────────┘
+**Illustrated walkthrough:** [PQ Tunnel Demo](https://claude.ai/artifact/QLeFTQXhSWSMBAYYZShGiq): the
+path of one ping, the handshake, why the relay adds a random, and the packets drawn to scale.
+
+### The path of one ping
+
+```mermaid
+flowchart TB
+  subgraph out["Phone, sending"]
+    app["ping 10.66.0.1"] --> kernel["Kernel routing<br/>10.66.0.0/24 goes to tun0, everything else stays on the normal network"]
+    kernel --> tx["TunnelService sender thread reads the IP packet from tun0"]
+    tx --> seal["tunnel_core over JNI: Client::seal, ChaCha20-Poly1305"]
+    seal --> sock["UDP socket, protect() keeps it outside the VPN"]
+  end
+  subgraph relay["Relay, Rust, UDP 51820"]
+    recv["recv_from, find the session by id"] --> sopen["Session::open: verify, replay check, decrypt, log"]
+    sopen --> echo["echo_reply: swap addresses, fix checksums"]
+    echo --> ssend["Session::seal, send_to the latest source address"]
+  end
+  subgraph back["Phone, receiving"]
+    rxsock["TunnelService receiver thread reads the UDP socket"] --> open["tunnel_core over JNI: Client::receive<br/>verify, replay check, decrypt"]
+    open --> tunw["write the reply to tun0, ping prints it"]
+  end
+  sock -- "DATA over UDP" --> recv
+  ssend -- "DATA over UDP" --> rxsock
 ```
 
 ## Contents
@@ -50,6 +63,22 @@ ACK   [0x03][session id, 8][server random, 32][HMAC-SHA256 tag, 16]
 DATA  [0x02][session id, 8][counter, 8][ChaCha20-Poly1305 ciphertext + tag]
 ```
 
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Client (phone)
+  participant R as Relay
+  Note over C: Has server.pub built in<br/>(X25519 key + ML-KEM-768 key)
+  Note over R: Has server.key
+  Note over C: New X25519 key eph<br/>x_ss = DH(eph, server X25519 key)<br/>(ct, k_ss) = ML-KEM encapsulate<br/>base, mac_key, id = HKDF(x_ss ‖ k_ss)
+  C->>R: INIT [eph public key 32 | ct 1088]
+  Note over R: x_ss = DH(server key, eph)<br/>k_ss = ML-KEM decapsulate(ct)<br/>same base, mac_key, id<br/>random = 32 fresh bytes<br/>traffic keys = HKDF(random, base)
+  R->>C: ACK [id | random | HMAC tag 16]
+  Note over C: Check the HMAC in constant time<br/>traffic keys = HKDF(random, base)<br/>packets read before this are dropped
+  C->>R: DATA [id | counter | ciphertext]
+  R->>C: DATA [id | counter | ciphertext]
+```
+
 1. **Handshake secrets.** `HKDF-SHA256(salt = "pq-tunnel-demo v2", ikm = X25519 secret ‖ ML-KEM
    secret, info = SHA-256(INIT body ‖ server public keys))` gives a base secret, an ACK MAC key and
    the session id. Reading traffic requires breaking **both** X25519 and ML-KEM. Hashing the INIT
@@ -67,6 +96,25 @@ DATA  [0x02][session id, 8][counter, 8][ChaCha20-Poly1305 ciphertext + tag]
    window, so a forged packet cannot block the real one.
 
 ### How the tunnel heals
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant A as Relay before restart
+  participant B as Relay after restart
+  C->>A: INIT
+  A->>C: ACK with random A
+  C->>A: DATA under keys A
+  Note over A: Restart, every session is lost
+  C-xB: DATA under keys A, unknown session, dropped
+  Note over C,B: Up to 10 seconds
+  C->>B: INIT, resent every 10 seconds
+  B->>C: ACK with random B
+  Note over C: Switch to keys B<br/>remember random A as used
+  C->>B: DATA under keys B
+  B->>C: DATA under keys B
+  Note over C,B: A replayed ACK with random A is refused by the client.<br/>Replayed DATA under keys A does not open on relay B.
+```
 
 | Event | What happens |
 |---|---|
@@ -98,6 +146,18 @@ The short version:
   Gradle skips a Copy task with no source files, actions included. `cargo` is looked up in
   `~/.cargo/bin` and `/opt/homebrew/opt/rustup/bin`, because Android Studio started from the Dock
   gets a PATH without Rust.
+
+### Inside the app
+
+```mermaid
+flowchart TB
+  ui["MainActivity, UI thread<br/>Connect starts the service<br/>redraws packet counts once a second"] --> svc["TunnelService"]
+  svc --> t1["tunnel thread<br/>opens the socket and tun0<br/>sender loop: tun0, seal, UDP"]
+  svc --> t2["tunnel-rx thread<br/>receiver loop: UDP, receive, tun0"]
+  svc --> t3["tunnel-init thread<br/>resends INIT every 10 seconds<br/>uses a copy of the INIT bytes, never the native handle"]
+  t1 --> stop["On stop<br/>close this run's socket and tun0<br/>wait for tunnel-rx to end<br/>Native.free(handle)"]
+  t2 --> stop
+```
 
 ## Known limits
 
