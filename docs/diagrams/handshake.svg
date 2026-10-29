@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 912 562" width="912" height="562" role="img" aria-label="Sequence: the client derives secrets from an X25519 exchange and an ML-KEM encapsulation and sends INIT; the relay derives the same secrets, picks a fresh random and returns an ACK; both derive traffic keys from the random and exchange DATA.">
+<title>Sequence: the client derives secrets from an X25519 exchange and an ML-KEM encapsulation and sends INIT; the relay derives the same secrets, picks a fresh random and returns an ACK; both derive traffic keys from the random and exchange DATA.</title>
+<style>
+svg { --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5b6875; --line:#c9d2da;
+  --x25519:#2a63a8; --pq:#a5560f; --new:#23744a; --bad:#b3261e;
+  --pq-fill:#f6e7d6; --new-fill:#dcefe3;
+  --sans:-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) {
+  svg { --bg:#0f151b; --panel:#17202a; --fg:#e4eaf0; --muted:#96a3b0; --line:#34414e;
+    --x25519:#7fb0ec; --pq:#e8a35e; --new:#6fcf98; --bad:#f08a80;
+    --pq-fill:#3a2a1a; --new-fill:#17352a; }
+}
+.card { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.frame { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.box-crypto { fill: var(--pq-fill); stroke: var(--pq); stroke-width: 1.2; }
+.t { fill: var(--fg); font: 400 12.5px var(--sans); }
+.th { fill: var(--fg); font: 600 14px var(--sans); }
+.tm { fill: var(--fg); font: 400 12px var(--mono); }
+.tmut { fill: var(--muted); font: 400 12px var(--sans); }
+.tmut-i { fill: var(--muted); font: italic 400 12px var(--sans); }
+.tx { fill: var(--x25519); font: 400 12px var(--mono); }
+.tpq { fill: var(--pq); font: 400 12px var(--mono); }
+.tnew { fill: var(--new); font: 500 12px var(--mono); }
+.tbad { fill: var(--bad); font: 500 12.5px var(--sans); }
+.tgood { fill: var(--new); font: 500 12.5px var(--sans); }
+.ln { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+.ln-new { stroke: var(--new); stroke-width: 1.8; fill: none; }
+.ln-bad { stroke: var(--bad); stroke-width: 1.8; fill: none; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.cut { stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.head { fill: var(--fg); } .head-new { fill: var(--new); } .head-bad { fill: var(--bad); }
+.seg-x { fill: var(--x25519); } .seg-pq { fill: var(--pq); } .seg-new { fill: var(--new); }
+.seg-n { fill: var(--muted); } .seg-body { fill: var(--line); }
+.axis { stroke: var(--muted); stroke-width: 1; }
+</style>
+<rect class="card" x="0.5" y="0.5" width="911" height="561" rx="10"/>
+<g transform="translate(16 16)">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="a2n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-new" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+          <rect class="box" x="60" y="16" width="180" height="36" rx="6"/>
+          <text class="th" x="150" y="39" text-anchor="middle">Client (phone)</text>
+          <rect class="box" x="640" y="16" width="180" height="36" rx="6"/>
+          <text class="th" x="730" y="39" text-anchor="middle">Relay</text>
+          <line class="life" x1="150" y1="52" x2="150" y2="520"/>
+          <line class="life" x1="730" y1="52" x2="730" y2="520"/>
+
+          <rect class="box" x="20" y="70" width="290" height="92" rx="6"/>
+          <text class="tx" x="34" y="93">eph = new X25519 key</text>
+          <text class="tx" x="34" y="113">x_ss = DH(eph, server X25519)</text>
+          <text class="tpq" x="34" y="133">ct, k_ss = ML-KEM encapsulate</text>
+          <text class="tm" x="34" y="153">base, mac, id = HKDF(x_ss ‖ k_ss)</text>
+
+          <line class="ln" x1="150" y1="196" x2="728" y2="196" marker-end="url(#a2)"/>
+          <text class="tm" x="440" y="186" text-anchor="middle">INIT: X25519 key 32 B + ML-KEM ciphertext 1088 B</text>
+
+          <rect class="box" x="575" y="214" width="295" height="92" rx="6"/>
+          <text class="tx" x="589" y="237">x_ss = DH(server key, eph)</text>
+          <text class="tpq" x="589" y="257">k_ss = ML-KEM decapsulate(ct)</text>
+          <text class="tnew" x="589" y="277">random = 32 fresh bytes</text>
+          <text class="tm" x="589" y="297">keys = HKDF(random, base)</text>
+
+          <line class="ln-new" x1="730" y1="340" x2="152" y2="340" marker-end="url(#a2n)"/>
+          <text class="tnew" x="440" y="330" text-anchor="middle">ACK: session id + random 32 B + HMAC tag 16 B</text>
+
+          <rect class="box" x="20" y="358" width="290" height="72" rx="6"/>
+          <text class="tm" x="34" y="381">check the HMAC, constant time</text>
+          <text class="tm" x="34" y="401">keys = HKDF(random, base)</text>
+          <text class="tmut" x="34" y="421">packets read before this are dropped</text>
+
+          <line class="ln" x1="150" y1="466" x2="728" y2="466" marker-end="url(#a2)"/>
+          <text class="tm" x="440" y="456" text-anchor="middle">DATA: ChaCha20-Poly1305, counter as nonce</text>
+          <line class="ln" x1="730" y1="504" x2="152" y2="504" marker-end="url(#a2)"/>
+          <text class="tm" x="440" y="494" text-anchor="middle">DATA: the reply</text>
+        <text class="tx" x="300" y="38">X25519</text><text class="tpq" x="380" y="38">ML-KEM-768</text><text class="tnew" x="490" y="38">server random</text></g>
+</svg>

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 912 294" width="912" height="294" role="img" aria-label="Byte bars to scale: INIT is 1121 bytes, of which 1088 are the ML-KEM ciphertext; ACK is 57 bytes; a DATA packet carrying one ping is 117 bytes.">
+<title>Byte bars to scale: INIT is 1121 bytes, of which 1088 are the ML-KEM ciphertext; ACK is 57 bytes; a DATA packet carrying one ping is 117 bytes.</title>
+<style>
+svg { --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5b6875; --line:#c9d2da;
+  --x25519:#2a63a8; --pq:#a5560f; --new:#23744a; --bad:#b3261e;
+  --pq-fill:#f6e7d6; --new-fill:#dcefe3;
+  --sans:-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) {
+  svg { --bg:#0f151b; --panel:#17202a; --fg:#e4eaf0; --muted:#96a3b0; --line:#34414e;
+    --x25519:#7fb0ec; --pq:#e8a35e; --new:#6fcf98; --bad:#f08a80;
+    --pq-fill:#3a2a1a; --new-fill:#17352a; }
+}
+.card { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.frame { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.box-crypto { fill: var(--pq-fill); stroke: var(--pq); stroke-width: 1.2; }
+.t { fill: var(--fg); font: 400 12.5px var(--sans); }
+.th { fill: var(--fg); font: 600 14px var(--sans); }
+.tm { fill: var(--fg); font: 400 12px var(--mono); }
+.tmut { fill: var(--muted); font: 400 12px var(--sans); }
+.tmut-i { fill: var(--muted); font: italic 400 12px var(--sans); }
+.tx { fill: var(--x25519); font: 400 12px var(--mono); }
+.tpq { fill: var(--pq); font: 400 12px var(--mono); }
+.tnew { fill: var(--new); font: 500 12px var(--mono); }
+.tbad { fill: var(--bad); font: 500 12.5px var(--sans); }
+.tgood { fill: var(--new); font: 500 12.5px var(--sans); }
+.ln { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+.ln-new { stroke: var(--new); stroke-width: 1.8; fill: none; }
+.ln-bad { stroke: var(--bad); stroke-width: 1.8; fill: none; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.cut { stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.head { fill: var(--fg); } .head-new { fill: var(--new); } .head-bad { fill: var(--bad); }
+.seg-x { fill: var(--x25519); } .seg-pq { fill: var(--pq); } .seg-new { fill: var(--new); }
+.seg-n { fill: var(--muted); } .seg-body { fill: var(--line); }
+.axis { stroke: var(--muted); stroke-width: 1; }
+</style>
+<rect class="card" x="0.5" y="0.5" width="911" height="293" rx="10"/>
+<g transform="translate(16 16)">
+          <text class="th" x="20" y="45">INIT</text>
+          <rect class="seg-n" x="100" y="26" width="2" height="28"/>
+          <rect class="seg-x" x="103" y="26" width="21" height="28"/>
+          <rect class="seg-pq" x="125" y="26" width="735" height="28"/>
+          <text class="tm" x="100" y="76">type 1 · X25519 key 32 · ML-KEM-768 ciphertext 1088 = 1121 bytes</text>
+
+          <text class="th" x="20" y="115">ACK</text>
+          <rect class="seg-n" x="100" y="96" width="2" height="28"/>
+          <rect class="seg-n" x="103" y="96" width="5" height="28"/>
+          <rect class="seg-new" x="109" y="96" width="21" height="28"/>
+          <rect class="seg-n" x="131" y="96" width="10" height="28"/>
+          <text class="tm" x="100" y="146">type 1 · session id 8 · server random 32 · HMAC tag 16 = 57 bytes</text>
+
+          <text class="th" x="20" y="185">DATA</text>
+          <rect class="seg-n" x="100" y="166" width="11" height="28"/>
+          <rect class="seg-body" x="112" y="166" width="57" height="28"/>
+          <rect class="seg-n" x="170" y="166" width="10" height="28"/>
+          <text class="tm" x="100" y="216">header 17 · encrypted ping 84 · Poly1305 tag 16 = 117 bytes</text>
+
+          <line class="axis" x1="100" y1="236" x2="860" y2="236"/>
+          <line class="axis" x1="100" y1="232" x2="100" y2="240"/>
+          <line class="axis" x1="273.6" y1="232" x2="273.6" y2="240"/>
+          <line class="axis" x1="447.1" y1="232" x2="447.1" y2="240"/>
+          <line class="axis" x1="620.7" y1="232" x2="620.7" y2="240"/>
+          <line class="axis" x1="794.3" y1="232" x2="794.3" y2="240"/>
+          <text class="tmut" x="100" y="255" text-anchor="middle">0</text>
+          <text class="tmut" x="273.6" y="255" text-anchor="middle">256</text>
+          <text class="tmut" x="447.1" y="255" text-anchor="middle">512</text>
+          <text class="tmut" x="620.7" y="255" text-anchor="middle">768</text>
+          <text class="tmut" x="794.3" y="255" text-anchor="middle">1024 bytes</text>
+        <text class="tx" x="520" y="14">X25519 key</text><text class="tpq" x="610" y="14">ML-KEM ciphertext</text><text class="tnew" x="750" y="14">server random</text></g>
+</svg>

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 912 472" width="912" height="472" role="img" aria-label="A ping travels down the phone's stack from the app through the kernel, tun0, the Kotlin service and the Rust core to a UDP socket, crosses to the relay as a sealed packet, is decrypted, answered, sealed again and returned to the phone.">
+<title>A ping travels down the phone's stack from the app through the kernel, tun0, the Kotlin service and the Rust core to a UDP socket, crosses to the relay as a sealed packet, is decrypted, answered, sealed again and returned to the phone.</title>
+<style>
+svg { --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5b6875; --line:#c9d2da;
+  --x25519:#2a63a8; --pq:#a5560f; --new:#23744a; --bad:#b3261e;
+  --pq-fill:#f6e7d6; --new-fill:#dcefe3;
+  --sans:-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) {
+  svg { --bg:#0f151b; --panel:#17202a; --fg:#e4eaf0; --muted:#96a3b0; --line:#34414e;
+    --x25519:#7fb0ec; --pq:#e8a35e; --new:#6fcf98; --bad:#f08a80;
+    --pq-fill:#3a2a1a; --new-fill:#17352a; }
+}
+.card { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.frame { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.box-crypto { fill: var(--pq-fill); stroke: var(--pq); stroke-width: 1.2; }
+.t { fill: var(--fg); font: 400 12.5px var(--sans); }
+.th { fill: var(--fg); font: 600 14px var(--sans); }
+.tm { fill: var(--fg); font: 400 12px var(--mono); }
+.tmut { fill: var(--muted); font: 400 12px var(--sans); }
+.tmut-i { fill: var(--muted); font: italic 400 12px var(--sans); }
+.tx { fill: var(--x25519); font: 400 12px var(--mono); }
+.tpq { fill: var(--pq); font: 400 12px var(--mono); }
+.tnew { fill: var(--new); font: 500 12px var(--mono); }
+.tbad { fill: var(--bad); font: 500 12.5px var(--sans); }
+.tgood { fill: var(--new); font: 500 12.5px var(--sans); }
+.ln { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+.ln-new { stroke: var(--new); stroke-width: 1.8; fill: none; }
+.ln-bad { stroke: var(--bad); stroke-width: 1.8; fill: none; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.cut { stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.head { fill: var(--fg); } .head-new { fill: var(--new); } .head-bad { fill: var(--bad); }
+.seg-x { fill: var(--x25519); } .seg-pq { fill: var(--pq); } .seg-new { fill: var(--new); }
+.seg-n { fill: var(--muted); } .seg-body { fill: var(--line); }
+.axis { stroke: var(--muted); stroke-width: 1; }
+</style>
+<rect class="card" x="0.5" y="0.5" width="911" height="471" rx="10"/>
+<g transform="translate(16 16)">
+          <defs>
+            <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+          <rect class="frame" x="20" y="20" width="380" height="400" rx="14"/>
+          <text class="th" x="40" y="47">Android phone</text>
+          <text class="tmut" x="360" y="47" text-anchor="end">↓ request   ↑ reply</text>
+
+          <rect class="box" x="40" y="64" width="320" height="40" rx="6"/>
+          <text class="tm" x="200" y="89" text-anchor="middle">ping 10.66.0.1</text>
+          <rect class="box" x="40" y="122" width="320" height="40" rx="6"/>
+          <text class="t" x="200" y="147" text-anchor="middle">Kernel routes 10.66.0.0/24 to tun0</text>
+          <rect class="box" x="40" y="180" width="320" height="40" rx="6"/>
+          <text class="t" x="200" y="205" text-anchor="middle">tun0, the VPN interface</text>
+          <rect class="box" x="40" y="238" width="320" height="40" rx="6"/>
+          <text class="t" x="200" y="263" text-anchor="middle">TunnelService (Kotlin, VpnService)</text>
+          <rect class="box-crypto" x="40" y="296" width="320" height="40" rx="6"/>
+          <text class="t" x="200" y="321" text-anchor="middle">tunnel_core (Rust over JNI): seal / open</text>
+          <rect class="box" x="40" y="354" width="320" height="40" rx="6"/>
+          <text class="t" x="200" y="379" text-anchor="middle">UDP socket, kept outside the VPN</text>
+
+          <g>
+            <line class="ln" x1="140" y1="104" x2="140" y2="120" marker-end="url(#a1)"/>
+            <line class="ln" x1="140" y1="162" x2="140" y2="178" marker-end="url(#a1)"/>
+            <line class="ln" x1="140" y1="220" x2="140" y2="236" marker-end="url(#a1)"/>
+            <line class="ln" x1="140" y1="278" x2="140" y2="294" marker-end="url(#a1)"/>
+            <line class="ln" x1="140" y1="336" x2="140" y2="352" marker-end="url(#a1)"/>
+            <line class="ln" x1="260" y1="122" x2="260" y2="106" marker-end="url(#a1)"/>
+            <line class="ln" x1="260" y1="180" x2="260" y2="164" marker-end="url(#a1)"/>
+            <line class="ln" x1="260" y1="238" x2="260" y2="222" marker-end="url(#a1)"/>
+            <line class="ln" x1="260" y1="296" x2="260" y2="280" marker-end="url(#a1)"/>
+            <line class="ln" x1="260" y1="354" x2="260" y2="338" marker-end="url(#a1)"/>
+          </g>
+
+          <rect class="frame" x="520" y="20" width="340" height="400" rx="14"/>
+          <text class="th" x="540" y="47">Relay (Rust, UDP 51820)</text>
+          <rect class="box" x="545" y="70" width="290" height="48" rx="6"/>
+          <text class="t" x="690" y="99" text-anchor="middle">recv_from: find the session by id</text>
+          <rect class="box-crypto" x="545" y="160" width="290" height="48" rx="6"/>
+          <text class="t" x="690" y="189" text-anchor="middle">Session::open: verify, replay check, decrypt</text>
+          <rect class="box" x="545" y="250" width="290" height="48" rx="6"/>
+          <text class="t" x="690" y="279" text-anchor="middle">echo_reply: swap addresses, fix checksums</text>
+          <rect class="box-crypto" x="545" y="340" width="290" height="48" rx="6"/>
+          <text class="t" x="690" y="369" text-anchor="middle">Session::seal: send to the latest address</text>
+          <line class="ln" x1="690" y1="118" x2="690" y2="158" marker-end="url(#a1)"/>
+          <line class="ln" x1="690" y1="208" x2="690" y2="248" marker-end="url(#a1)"/>
+          <line class="ln" x1="690" y1="298" x2="690" y2="338" marker-end="url(#a1)"/>
+
+          <line class="ln" x1="360" y1="370" x2="543" y2="96" marker-end="url(#a1)"/>
+          <text class="tm" x="445" y="175" text-anchor="middle">sealed ping</text>
+          <line class="ln" x1="545" y1="366" x2="362" y2="384" marker-end="url(#a1)"/>
+          <text class="tm" x="452" y="356" text-anchor="middle">sealed reply</text>
+        </g>
+</svg>

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 912 362" width="912" height="362" role="img" aria-label="Side by side. Before: after a restart the relay answers the same INIT with key K and counter 0 again, reusing a key and nonce. After: each relay process sends an ACK with its own random, so after the restart the key is K_B and nothing repeats.">
+<title>Side by side. Before: after a restart the relay answers the same INIT with key K and counter 0 again, reusing a key and nonce. After: each relay process sends an ACK with its own random, so after the restart the key is K_B and nothing repeats.</title>
+<style>
+svg { --bg:#f5f7f8; --panel:#ffffff; --fg:#17212b; --muted:#5b6875; --line:#c9d2da;
+  --x25519:#2a63a8; --pq:#a5560f; --new:#23744a; --bad:#b3261e;
+  --pq-fill:#f6e7d6; --new-fill:#dcefe3;
+  --sans:-apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) {
+  svg { --bg:#0f151b; --panel:#17202a; --fg:#e4eaf0; --muted:#96a3b0; --line:#34414e;
+    --x25519:#7fb0ec; --pq:#e8a35e; --new:#6fcf98; --bad:#f08a80;
+    --pq-fill:#3a2a1a; --new-fill:#17352a; }
+}
+.card { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.frame { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.box-crypto { fill: var(--pq-fill); stroke: var(--pq); stroke-width: 1.2; }
+.t { fill: var(--fg); font: 400 12.5px var(--sans); }
+.th { fill: var(--fg); font: 600 14px var(--sans); }
+.tm { fill: var(--fg); font: 400 12px var(--mono); }
+.tmut { fill: var(--muted); font: 400 12px var(--sans); }
+.tmut-i { fill: var(--muted); font: italic 400 12px var(--sans); }
+.tx { fill: var(--x25519); font: 400 12px var(--mono); }
+.tpq { fill: var(--pq); font: 400 12px var(--mono); }
+.tnew { fill: var(--new); font: 500 12px var(--mono); }
+.tbad { fill: var(--bad); font: 500 12.5px var(--sans); }
+.tgood { fill: var(--new); font: 500 12.5px var(--sans); }
+.ln { stroke: var(--fg); stroke-width: 1.4; fill: none; }
+.ln-new { stroke: var(--new); stroke-width: 1.8; fill: none; }
+.ln-bad { stroke: var(--bad); stroke-width: 1.8; fill: none; }
+.life { stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.cut { stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 6 4; }
+.head { fill: var(--fg); } .head-new { fill: var(--new); } .head-bad { fill: var(--bad); }
+.seg-x { fill: var(--x25519); } .seg-pq { fill: var(--pq); } .seg-new { fill: var(--new); }
+.seg-n { fill: var(--muted); } .seg-body { fill: var(--line); }
+.axis { stroke: var(--muted); stroke-width: 1; }
+</style>
+<rect class="card" x="0.5" y="0.5" width="911" height="361" rx="10"/>
+<g transform="translate(16 16)">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="a3n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-new" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="a3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-bad" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+
+          <rect class="frame" x="0" y="0" width="430" height="330" rx="12"/>
+          <text class="th" x="20" y="28">Before: keys from INIT alone</text>
+          <text class="tmut" x="70" y="56" text-anchor="middle">phone</text>
+          <text class="tmut" x="360" y="56" text-anchor="middle">relay</text>
+          <line class="life" x1="70" y1="64" x2="70" y2="286"/>
+          <line class="life" x1="360" y1="64" x2="360" y2="286"/>
+          <line class="ln" x1="70" y1="84" x2="358" y2="84" marker-end="url(#a3)"/>
+          <text class="tm" x="215" y="78" text-anchor="middle">INIT</text>
+          <text class="tmut-i" x="215" y="113" text-anchor="middle">no ACK</text>
+          <line class="ln" x1="360" y1="144" x2="72" y2="144" marker-end="url(#a3)"/>
+          <text class="tm" x="215" y="138" text-anchor="middle">DATA, key K, counter 0</text>
+          <line class="cut" x1="20" y1="176" x2="410" y2="176"/>
+          <text class="tbad" x="215" y="170" text-anchor="middle">relay restarts, sessions lost</text>
+          <line class="ln" x1="70" y1="204" x2="358" y2="204" marker-end="url(#a3)"/>
+          <text class="tm" x="215" y="198" text-anchor="middle">same INIT, resent</text>
+          <text class="tmut-i" x="215" y="233" text-anchor="middle">no ACK</text>
+          <line class="ln-bad" x1="360" y1="264" x2="72" y2="264" marker-end="url(#a3b)"/>
+          <text class="tbad" x="215" y="258" text-anchor="middle">DATA, key K, counter 0 again</text>
+          <text class="tbad" x="20" y="314">Same key and nonce twice: the XOR of two plaintexts leaks.</text>
+
+          <rect class="frame" x="450" y="0" width="430" height="330" rx="12"/>
+          <text class="th" x="470" y="28">After: a random per relay session</text>
+          <text class="tmut" x="520" y="56" text-anchor="middle">phone</text>
+          <text class="tmut" x="810" y="56" text-anchor="middle">relay</text>
+          <line class="life" x1="520" y1="64" x2="520" y2="286"/>
+          <line class="life" x1="810" y1="64" x2="810" y2="286"/>
+          <line class="ln" x1="520" y1="84" x2="808" y2="84" marker-end="url(#a3)"/>
+          <text class="tm" x="665" y="78" text-anchor="middle">INIT</text>
+          <line class="ln-new" x1="810" y1="114" x2="522" y2="114" marker-end="url(#a3n)"/>
+          <text class="tnew" x="665" y="108" text-anchor="middle">ACK, random A</text>
+          <line class="ln" x1="810" y1="144" x2="522" y2="144" marker-end="url(#a3)"/>
+          <text class="tm" x="665" y="138" text-anchor="middle">DATA, key K_A, counter 0</text>
+          <line class="cut" x1="470" y1="176" x2="860" y2="176"/>
+          <text class="tbad" x="665" y="170" text-anchor="middle">relay restarts, sessions lost</text>
+          <line class="ln" x1="520" y1="204" x2="808" y2="204" marker-end="url(#a3)"/>
+          <text class="tm" x="665" y="198" text-anchor="middle">same INIT, resent</text>
+          <line class="ln-new" x1="810" y1="234" x2="522" y2="234" marker-end="url(#a3n)"/>
+          <text class="tnew" x="665" y="228" text-anchor="middle">ACK, random B</text>
+          <line class="ln-new" x1="810" y1="264" x2="522" y2="264" marker-end="url(#a3n)"/>
+          <text class="tnew" x="665" y="258" text-anchor="middle">DATA, key K_B, counter 0</text>
+          <text class="tgood" x="470" y="314">New key after the restart: no key and nonce repeat.</text>
+        </g>
+</svg>

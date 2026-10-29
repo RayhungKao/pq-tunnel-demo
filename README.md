@@ -5,35 +5,18 @@ handshake and ChaCha20-Poly1305 packets, called from Kotlin over JNI. It is a st
 mobile [PQConnect](https://www.pqconnect.net) client needs (a system VPN interface, a Rust core
 behind FFI, post-quantum key exchange), not a replacement for it.
 
-**Illustrated walkthrough:** [PQ Tunnel Demo](https://claude.ai/artifact/QLeFTQXhSWSMBAYYZShGiq): the
-path of one ping, the handshake, why the relay adds a random, and the packets drawn to scale.
-
 ### The path of one ping
 
-```mermaid
-flowchart TB
-  subgraph out["Phone, sending"]
-    app["ping 10.66.0.1"] --> kernel["Kernel routing<br/>10.66.0.0/24 goes to tun0, everything else stays on the normal network"]
-    kernel --> tx["TunnelService sender thread reads the IP packet from tun0"]
-    tx --> seal["tunnel_core over JNI: Client::seal, ChaCha20-Poly1305"]
-    seal --> sock["UDP socket, protect() keeps it outside the VPN"]
-  end
-  subgraph relay["Relay, Rust, UDP 51820"]
-    recv["recv_from, find the session by id"] --> sopen["Session::open: verify, replay check, decrypt, log"]
-    sopen --> echo["echo_reply: swap addresses, fix checksums"]
-    echo --> ssend["Session::seal, send_to the latest source address"]
-  end
-  subgraph back["Phone, receiving"]
-    rxsock["TunnelService receiver thread reads the UDP socket"] --> open["tunnel_core over JNI: Client::receive<br/>verify, replay check, decrypt"]
-    open --> tunw["write the reply to tun0, ping prints it"]
-  end
-  sock -- "DATA over UDP" --> recv
-  ssend -- "DATA over UDP" --> rxsock
-```
+![A ping travels down the phone's stack through the Rust core to a UDP socket, crosses to the relay sealed, is decrypted, answered, sealed again and returned](docs/diagrams/ping-path.svg)
+
+Shaded boxes are where the crypto runs. Only 10.66.0.0/24 is routed into the VPN interface; the
+phone's own UDP socket is excluded with `protect()`, so sealed packets do not loop back into the
+tunnel. The relay answers only pings to the gateway 10.66.0.1 and forwards nothing to the internet.
 
 ## Contents
 
 - [Layout](#layout)
+- [What is real, what is simplified](#what-is-real-what-is-simplified)
 - [Protocol](#protocol)
 - [Design decisions](#design-decisions)
 - [Known limits](#known-limits)
@@ -49,8 +32,19 @@ flowchart TB
 | `core/` | Rust crate `tunnel_core`: handshake, ACK, AEAD packets, replay window, JNI bindings (`src/android.rs`) |
 | `relay/` | Rust UDP server: key generation, session table, ICMP echo for the gateway |
 | `android/` | Kotlin app: `VpnService`, a one-screen UI, Gradle tasks that cross-compile the Rust core |
+| `docs/diagrams/` | The SVG diagrams in this README (self-contained, light and dark) |
 | `openspec/specs/` | Requirements and scenarios for each part; the source of truth for behavior |
 | `openspec/changes/archive/` | Past changes with their proposal, design and task list |
+
+## What is real, what is simplified
+
+| Real | Simplified |
+|---|---|
+| ML-KEM-768 (NIST FIPS 203) from RustCrypto's `ml-kem`, run on every connect | The protocol is this demo's own, not PQConnect's |
+| X25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305 | No forward secrecy if the server's long-term key is stolen |
+| Android `VpnService` with a real tun interface and routes | Clients are anonymous; sessions never expire |
+| Rust core cross-compiled for arm64 and x86_64, called over JNI | The relay answers pings to 10.66.0.1 and forwards nothing else |
+| 17 Rust tests, plus connect, relay restart and disconnect checked on an emulator | Android only; an iOS client would reuse the same Rust core |
 
 ## Protocol
 
@@ -63,21 +57,12 @@ ACK   [0x03][session id, 8][server random, 32][HMAC-SHA256 tag, 16]
 DATA  [0x02][session id, 8][counter, 8][ChaCha20-Poly1305 ciphertext + tag]
 ```
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant C as Client (phone)
-  participant R as Relay
-  Note over C: Has server.pub built in<br/>(X25519 key + ML-KEM-768 key)
-  Note over R: Has server.key
-  Note over C: New X25519 key eph<br/>x_ss = DH(eph, server X25519 key)<br/>(ct, k_ss) = ML-KEM encapsulate<br/>base, mac_key, id = HKDF(x_ss ‖ k_ss)
-  C->>R: INIT [eph public key 32 | ct 1088]
-  Note over R: x_ss = DH(server key, eph)<br/>k_ss = ML-KEM decapsulate(ct)<br/>same base, mac_key, id<br/>random = 32 fresh bytes<br/>traffic keys = HKDF(random, base)
-  R->>C: ACK [id | random | HMAC tag 16]
-  Note over C: Check the HMAC in constant time<br/>traffic keys = HKDF(random, base)<br/>packets read before this are dropped
-  C->>R: DATA [id | counter | ciphertext]
-  R->>C: DATA [id | counter | ciphertext]
-```
+![Packet sizes to scale: INIT is 1121 bytes, 1088 of them the ML-KEM ciphertext; ACK is 57 bytes; DATA with one ping is 117 bytes](docs/diagrams/packet-sizes.svg)
+
+Drawn to scale (one byte is 0.68 px). The post-quantum part is almost all of the handshake's size
+and costs nothing per packet after it. INIT still fits in one UDP packet on a 1280-byte path.
+
+![Handshake: INIT carries the X25519 key and ML-KEM ciphertext; the relay derives the same secrets, picks a fresh random and returns a signed ACK; both derive traffic keys from the random](docs/diagrams/handshake.svg)
 
 1. **Handshake secrets.** `HKDF-SHA256(salt = "pq-tunnel-demo v2", ikm = X25519 secret ‖ ML-KEM
    secret, info = SHA-256(INIT body ‖ server public keys))` gives a base secret, an ACK MAC key and
@@ -97,24 +82,11 @@ sequenceDiagram
 
 ### How the tunnel heals
 
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant A as Relay before restart
-  participant B as Relay after restart
-  C->>A: INIT
-  A->>C: ACK with random A
-  C->>A: DATA under keys A
-  Note over A: Restart, every session is lost
-  C-xB: DATA under keys A, unknown session, dropped
-  Note over C,B: Up to 10 seconds
-  C->>B: INIT, resent every 10 seconds
-  B->>C: ACK with random B
-  Note over C: Switch to keys B<br/>remember random A as used
-  C->>B: DATA under keys B
-  B->>C: DATA under keys B
-  Note over C,B: A replayed ACK with random A is refused by the client.<br/>Replayed DATA under keys A does not open on relay B.
-```
+![Before and after: in v1 a restarted relay answers the same INIT with the same key and counter 0 again; in v2 each relay session sends its own random, so the key after the restart is new](docs/diagrams/restart-before-after.svg)
+
+The green arrows are what the fix added. The client also remembers every random it has accepted,
+so an attacker who replays the old ACK cannot switch it back to the old key and replay recorded
+packets.
 
 | Event | What happens |
 |---|---|
