@@ -1,0 +1,7 @@
+[workspace]
+members = ["core", "relay"]
+resolver = "2"
+
+[profile.release]
+strip = true
+lto = true
