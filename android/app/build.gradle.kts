@@ -13,6 +13,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -29,6 +30,9 @@ android {
 
 dependencies {
     implementation("androidx.activity:activity-ktx:1.9.3")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
 
 val repoRoot = rootProject.projectDir.parentFile
@@ -41,6 +45,14 @@ val cargo = cargoDirs.map { File(it, "cargo") }.firstOrNull { it.canExecute() }?
 // Cross-compiles the Rust core for phones (arm64) and the emulator on Apple silicon or x86 hosts.
 val buildRust by tasks.registering(Exec::class) {
     workingDir = repoRoot
+    // Checked before the Rust build, the first task that always runs, so a fresh clone without
+    // keys/ fails in seconds. (A check in copyServerKey would never run: Gradle skips a Copy task
+    // with no source files, NO-SOURCE, actions included.)
+    doFirst {
+        check(File(repoRoot, "keys/server.pub").exists()) {
+            "No keys/server.pub. Run `cargo run -p relay -- keygen keys` in the repository root first."
+        }
+    }
     // cargo needs these dirs on PATH to find the cargo-ndk subcommand, and cargo-ndk needs the SDK
     // to find the NDK.
     environment("PATH", (cargoDirs + System.getenv("PATH").orEmpty()).joinToString(File.pathSeparator))
@@ -58,13 +70,4 @@ val copyServerKey by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("generated/serverKey"))
 }
 
-tasks.named("preBuild") {
-    dependsOn(buildRust, copyServerKey)
-    // Checked here, not in copyServerKey: Gradle skips a Copy task with no source files
-    // (NO-SOURCE), actions included, so a fresh clone without keys/ would build an APK with no key.
-    doFirst {
-        check(File(repoRoot, "keys/server.pub").exists()) {
-            "No keys/server.pub. Run `cargo run -p relay -- keygen keys` in the repository root first."
-        }
-    }
-}
+tasks.named("preBuild") { dependsOn(buildRust, copyServerKey) }

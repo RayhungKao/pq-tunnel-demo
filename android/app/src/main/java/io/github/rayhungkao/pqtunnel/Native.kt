@@ -17,5 +17,7 @@ object Native {
      * packets that fail authentication or the replay check.
      */
     @JvmStatic external fun open(session: Long, packet: ByteArray): ByteArray?
+    /** True once the relay's ACK has arrived and data can flow. */
+    @JvmStatic external fun ready(session: Long): Boolean
     @JvmStatic external fun free(session: Long)
 }

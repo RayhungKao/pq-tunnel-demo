@@ -44,7 +44,7 @@ tunnel. The relay answers only pings to the gateway 10.66.0.1 and forwards nothi
 | X25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305 | No forward secrecy if the server's long-term key is stolen |
 | Android `VpnService` with a real tun interface and routes | Clients are anonymous; sessions never expire |
 | Rust core cross-compiled for arm64 and x86_64, called over JNI | The relay answers pings to 10.66.0.1 and forwards nothing else |
-| 17 Rust tests, plus connect, relay restart and disconnect checked on an emulator | Android only; an iOS client would reuse the same Rust core |
+| 17 Rust tests, 5 JVM tests and 5 instrumented Android tests, plus checks by hand on an emulator | Android only; an iOS client would reuse the same Rust core |
 
 ## Protocol
 
@@ -114,8 +114,15 @@ The short version:
 - **Native handle lifetime.** Kotlin holds the Rust session as an opaque `Long`. Each connection
   frees it only after both packet loops have ended, closes only the socket and interface it created,
   and the INIT resend thread copies the INIT bytes so it never touches the handle.
-- **Build checks that cannot be skipped.** The `keys/server.pub` check runs in `preBuild`, because
-  Gradle skips a Copy task with no source files, actions included. `cargo` is looked up in
+- **Stopping that cannot get lost.** Closing `tun0` does not wake a thread blocked reading it, so
+  the sender waits with `Os.poll` and a 500 ms timeout. Each connection is a `Run` object that a stop
+  marks and closes, and that checks the mark after opening its socket and interface, so a stop that
+  arrives early is not lost. `stopSelf(startId)` keeps a Connect that arrived after a Disconnect.
+- **The status only claims what the client knows.** "Connected" waits for the relay's ACK; before it
+  the screen says "Waiting for the relay". An error that ends a connection stays on screen.
+- **Build checks that cannot be skipped.** The `keys/server.pub` check runs first in the Rust build
+  task, so a fresh clone fails in seconds. It cannot live in the Copy task: Gradle skips a Copy task
+  with no source files, actions included. `cargo` is looked up in
   `~/.cargo/bin` and `/opt/homebrew/opt/rustup/bin`, because Android Studio started from the Dock
   gets a PATH without Rust.
 
@@ -124,8 +131,8 @@ The short version:
 ```mermaid
 flowchart TB
   ui["MainActivity, UI thread<br/>Connect starts the service<br/>redraws packet counts once a second"] --> svc["TunnelService"]
-  svc --> t1["tunnel thread<br/>opens the socket and tun0<br/>sender loop: tun0, seal, UDP"]
-  svc --> t2["tunnel-rx thread<br/>receiver loop: UDP, receive, tun0"]
+  svc --> t1["tunnel thread<br/>opens the socket and tun0<br/>sender loop: poll tun0, seal, UDP"]
+  svc --> t2["tunnel-rx thread<br/>receiver loop: UDP, receive, tun0<br/>shows Connected after the first ACK"]
   svc --> t3["tunnel-init thread<br/>resends INIT every 10 seconds<br/>uses a copy of the INIT bytes, never the native handle"]
   t1 --> stop["On stop<br/>close this run's socket and tun0<br/>wait for tunnel-rx to end<br/>Native.free(handle)"]
   t2 --> stop
@@ -151,10 +158,20 @@ On purpose, for a demo:
 Needs Rust (with the `aarch64-linux-android` and `x86_64-linux-android` targets), `cargo-ndk`,
 JDK 17, and the Android SDK with NDK 27.
 
-Run the tests:
+Run the Rust tests and the Android JVM tests (the second needs `keys/server.pub`, see below):
 
 ```bash
 cargo test
+```
+
+```bash
+cd android && ./gradlew test
+```
+
+Run the instrumented Android tests on a running emulator or device:
+
+```bash
+cd android && ./gradlew connectedDebugAndroidTest
 ```
 
 Generate the server keys once. `server.key` gets mode 600, and a second run refuses to overwrite
@@ -178,37 +195,51 @@ cd android && ./gradlew installDebug
 ```
 
 Open **PQ Tunnel Demo**, keep the default relay `10.0.2.2:51820` (the host machine as seen from the
-emulator), tap **Connect**, allow the VPN, then ping the gateway from the device:
+emulator), tap **Connect** and allow the VPN. The screen says "Waiting for the relay" until the
+relay answers, then "Connected". Ping the gateway from the device:
 
 ```bash
 adb shell ping -c 3 10.66.0.1
 ```
 
 The relay logs each decrypted packet, and the app shows packets sent and received. On a real phone,
-use the LAN address of the machine running the relay. Only 10.66.0.0/24 goes through the tunnel;
+use the LAN address of the machine running the relay; IPv6 addresses go in brackets, as in
+`[fd00::1]:51820`. Only 10.66.0.0/24 goes through the tunnel;
 the rest of the phone's traffic is untouched.
 
 ## Tests and verification
 
-`cargo test` runs 17 tests, each named after the spec scenario it covers.
+27 automated tests, each named after the spec scenario it covers.
 
-- **Core (10):** round trips in both directions, no data before the ACK, key save/load, ACKs from
-  the wrong server or with a forged MAC, a restarted server that must derive new keys and must not
-  be switched back, tampered packets, replay and reordering, the window edge, malformed handshakes.
-- **Relay (7):** over real UDP sockets, an end-to-end ping, a replayed INIT that must not reopen
-  recorded packets, replies to a client's new address, and recovery after a relay restart; plus
-  ICMP checksums, pings to other addresses, and IP headers too short to read.
+- **Rust core (10), `cargo test`:** round trips in both directions, no data and not ready before
+  the ACK, key save/load, ACKs from the wrong server or with a forged MAC, a restarted server that
+  must derive new keys and must not be switched back, tampered packets, replay and reordering, the
+  window edge, malformed handshakes.
+- **Relay (7), `cargo test`:** over real UDP sockets, an end-to-end ping, a replayed INIT that must
+  not reopen recorded packets, replies to a client's new address, and recovery after a relay
+  restart; plus ICMP checksums, pings to other addresses, and IP headers too short to read.
+- **Relay address parser (5), `./gradlew test`:** host and port, default port, IPv6 in brackets and
+  bare, and ten inputs that must be refused.
+- **TunnelService (5), `./gradlew connectedDebugAndroidTest`:** the real service against a fake
+  relay, a UDP socket on the device that receives the INIT but cannot answer it. INIT is sent and
+  the status stays "Waiting"; an unresolvable host keeps its error on screen; an IPv6 relay gets the
+  INIT; an idle tunnel disconnects within 2 seconds; ten rounds of quick Connect and Disconnect end
+  cleanly. The tests run in the app's process, so a native crash fails them. Writing them found
+  three stopping bugs, fixed in
+  [`fix-client-lifecycle`](openspec/changes/archive/2026-10-29-fix-client-lifecycle/proposal.md).
 
-The Android app has no automated tests. It was checked by hand on an API 32 arm64 emulator:
+Checked by hand on an API 32 arm64 emulator with the real relay:
 
 | Check | Result |
 |---|---|
 | Relay `10.0.2.2:` | "Bad relay address", app keeps running |
-| Connect, `ping -c 3 10.66.0.1` | `tun0` has 10.66.0.2, 3 of 3 answered |
+| Relay not running, Connect | "Waiting for the relay at 10.0.2.2:51820" |
+| Start the relay, wait 11 seconds | "Connected", with no user action |
+| `ping -c 3 10.66.0.1`, wait 1.5 seconds | 3 of 3 answered; screen shows 4 sent, 3 received |
 | Restart the relay, wait 11 seconds, ping | 3 of 3 answered, no user action |
 | Tap Connect twice, ping | "Connected", 3 of 3 answered |
-| Disconnect | `tun0` removed, "Disconnected", no crash in logcat |
-| Build a copy without `keys/`, PATH `/usr/bin:/bin:/usr/sbin:/sbin` | Rust core compiles, build stops with the keygen hint |
+| Disconnect | "Disconnected" within 1.5 seconds, `tun0` removed, no crash in logcat |
+| Build a copy without `keys/`, PATH `/usr/bin:/bin:/usr/sbin:/sbin` | Fails in 1 second with the keygen hint, before any Rust compiles |
 
 Not reproduced: a failed send during a network switch (the emulator does not make `send` fail).
 
@@ -219,9 +250,9 @@ Behavior is specified with [OpenSpec](https://github.com/Fission-AI/OpenSpec) in
 
 | Spec | Covers |
 |---|---|
-| [`tunnel-protocol`](openspec/specs/tunnel-protocol/spec.md) | INIT, handshake secrets, ACK, traffic keys, DATA, replay window |
+| [`tunnel-protocol`](openspec/specs/tunnel-protocol/spec.md) | INIT, handshake secrets, ACK, readiness, traffic keys, DATA, replay window |
 | [`relay`](openspec/specs/relay/spec.md) | key generation, sessions and repeated INITs, reply addresses, packet parsing |
-| [`android-client`](openspec/specs/android-client/spec.md) | VPN routes, input errors, self-healing, connection lifecycle, counters, build |
+| [`android-client`](openspec/specs/android-client/spec.md) | VPN routes, status, input errors, self-healing, connection lifecycle and stopping, counters, build |
 
 Each requirement has scenarios (WHEN / THEN), and each Rust test is named after one. Changes go
 through `openspec/changes/<name>/` (proposal, design, tasks, spec deltas) and are archived when

@@ -3,6 +3,10 @@ package io.github.rayhungkao.pqtunnel
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
+import android.system.StructPollfd
 import android.util.Base64
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -19,18 +23,37 @@ import kotlin.concurrent.thread
  */
 class TunnelService : VpnService() {
 
-    @Volatile private var tun: ParcelFileDescriptor? = null
-    @Volatile private var socket: DatagramSocket? = null
+    /**
+     * One connection attempt. [stop] may run before the attempt has opened its socket or
+     * interface; the attempt checks [stopped] after opening each, so the stop is never lost.
+     */
+    private class Run(val id: Int) {
+        @Volatile var stopped = false
+        @Volatile var socket: DatagramSocket? = null
+        @Volatile var tun: ParcelFileDescriptor? = null
+
+        fun stop() {
+            stopped = true
+            socket?.close()
+            tun?.close()
+        }
+    }
+
+    @Volatile private var current: Run? = null
     private var worker: Thread? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         stopTunnel()
         if (intent?.action == ACTION_STOP) {
-            stopSelf()
+            // With the id, Android keeps the service if a newer Connect has already arrived;
+            // without it, onDestroy() would stop that new connection too.
+            stopSelf(startId)
             return START_NOT_STICKY
         }
         val relay = intent?.getStringExtra(EXTRA_RELAY) ?: return START_NOT_STICKY
-        worker = thread(name = "tunnel") { runTunnel(relay) }
+        // A newer run makes the old one's late status messages stale, so they are dropped.
+        val run = Run(generation.incrementAndGet()).also { current = it }
+        worker = thread(name = "tunnel") { runTunnel(relay, run) }
         return START_STICKY
     }
 
@@ -46,23 +69,14 @@ class TunnelService : VpnService() {
     }
 
     private fun stopTunnel() {
-        // Closing both ends makes the blocking reads below throw, which ends the worker.
-        socket?.close()
-        tun?.close()
+        // Closing the socket and interface ends both packet loops within POLL_MS.
+        current?.stop()
         worker?.join(1000)
         worker = null
     }
 
-    private fun runTunnel(relay: String) {
-        // A newer run makes this one's late status messages stale, so they are dropped.
-        val run = generation.incrementAndGet()
-        val parts = relay.split(":")
-        val host = parts[0]
-        val port = parts.getOrElse(1) { "51820" }.toIntOrNull()
-        if (host.isEmpty() || port == null || port !in 1..65535) {
-            report(run, "Bad relay address: $relay")
-            return
-        }
+    private fun runTunnel(relay: String, run: Run) {
+        val (host, port) = parseRelay(relay) ?: return report(run, "Bad relay address: $relay")
         val session = try {
             Native.connect(Base64.decode(assets.open("server.pub").readBytes(), Base64.DEFAULT))
         } catch (e: Exception) {
@@ -72,13 +86,12 @@ class TunnelService : VpnService() {
             report(run, "No valid server key in the APK")
             return
         }
-        // This run's own socket and interface. Cleanup uses these, never the fields, which a newer
-        // run may already have replaced.
-        var udp: DatagramSocket? = null
-        var iface: ParcelFileDescriptor? = null
         var receiver: Thread? = null
+        // Shown instead of "Disconnected" when the run ends, so the user sees why it stopped.
+        var error: String? = null
         try {
-            val sock = DatagramSocket().also { udp = it; socket = it }
+            val sock = DatagramSocket().also { run.socket = it }
+            if (run.stopped) return
             // Keep the tunnel's own packets outside the tunnel, or they would loop back into it.
             protect(sock)
             sock.connect(InetSocketAddress(host, port))
@@ -90,9 +103,10 @@ class TunnelService : VpnService() {
                 // Leaves room for the 33-byte tunnel header inside a typical 1500-byte path.
                 .setMtu(1280)
                 .establish() ?: throw IOException("VPN permission was revoked")
-            iface = tunFd
-            tun = tunFd
-            report(run, "Connected to $host:$port (X25519 + ML-KEM-768)")
+            run.tun = tunFd
+            if (run.stopped) return
+            // "Connected" waits for the relay's ACK: before it, nothing proves the relay is there.
+            report(run, "Waiting for the relay at $host:$port")
 
             val init = Native.initPacket(session)
             // UDP can drop the INIT, and a restarted relay forgets every session, so keep resending
@@ -109,12 +123,17 @@ class TunnelService : VpnService() {
             receiver = thread(name = "tunnel-rx") {
                 val buf = ByteArray(65535)
                 val packet = DatagramPacket(buf, buf.size)
+                var connected = false
                 try {
                     while (true) {
                         sock.receive(packet)
-                        Native.open(session, buf.copyOf(packet.length))?.let {
-                            toPhone.write(it)
+                        val ip = Native.open(session, buf.copyOf(packet.length))
+                        if (ip != null) {
+                            toPhone.write(ip)
                             packetsReceived++ // only this thread writes it
+                        } else if (!connected && Native.ready(session)) {
+                            connected = true
+                            report(run, "Connected to $host:$port (X25519 + ML-KEM-768)")
                         }
                     }
                 } catch (_: IOException) {
@@ -124,8 +143,15 @@ class TunnelService : VpnService() {
 
             val fromPhone = FileInputStream(tunFd.fileDescriptor)
             val buf = ByteArray(65535)
+            val readable = StructPollfd().apply {
+                fd = tunFd.fileDescriptor
+                events = OsConstants.POLLIN.toShort()
+            }
             try {
-                while (true) {
+                // A read blocked on tun0 does not return when another thread closes it, so wait
+                // with a timeout and stop once stopTunnel() has closed the socket.
+                while (!sock.isClosed) {
+                    if (!pollQuietly(readable)) continue
                     val n = fromPhone.read(buf)
                     if (n < 0) break
                     if (n == 0) continue
@@ -138,15 +164,23 @@ class TunnelService : VpnService() {
                 // stopTunnel() closed the interface.
             }
         } catch (e: Exception) {
-            report(run, "Error: ${e.message}")
+            error = "Error: ${e.message ?: e.javaClass.simpleName}"
         } finally {
-            udp?.close()
-            iface?.close()
+            run.socket?.close()
+            run.tun?.close()
             // Both packet loops must have stopped before the handle is freed.
             receiver?.join()
             Native.free(session)
-            report(run, "Disconnected")
+            report(run, error ?: "Disconnected")
         }
+    }
+
+    /** True when [pollfd] has something to read; false after [POLL_MS] or an interrupted wait. */
+    private fun pollQuietly(pollfd: StructPollfd): Boolean = try {
+        Os.poll(arrayOf(pollfd), POLL_MS) > 0
+    } catch (e: ErrnoException) {
+        if (e.errno != OsConstants.EINTR) throw IOException(e)
+        false
     }
 
     private fun sendQuietly(sock: DatagramSocket, bytes: ByteArray): Boolean = try {
@@ -156,8 +190,8 @@ class TunnelService : VpnService() {
         false
     }
 
-    private fun report(run: Int, status: String) {
-        if (run != generation.get()) return
+    private fun report(run: Run, status: String) {
+        if (run.id != generation.get()) return
         lastStatus = status
         listener?.invoke(status)
     }
@@ -173,6 +207,7 @@ class TunnelService : VpnService() {
         @Volatile var listener: ((String) -> Unit)? = null
 
         private const val INIT_RESEND_MS = 10_000L
+        private const val POLL_MS = 500
         private val generation = AtomicInteger()
     }
 }

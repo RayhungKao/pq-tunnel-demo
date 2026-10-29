@@ -4,7 +4,7 @@
 use std::sync::Mutex;
 
 use jni::objects::{JByteArray, JClass};
-use jni::sys::{jbyteArray, jlong};
+use jni::sys::{jboolean, jbyteArray, jlong};
 use jni::JNIEnv;
 
 use crate::Client;
@@ -76,6 +76,11 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_open(
         Ok(Some(plain)) => to_java(&mut env, &plain),
         _ => std::ptr::null_mut(),
     }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_ready(_: JNIEnv, _: JClass, h: jlong) -> jboolean {
+    jboolean::from(handle(h).client.lock().unwrap().is_ready())
 }
 
 #[no_mangle]

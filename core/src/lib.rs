@@ -194,6 +194,11 @@ pub struct Client {
 }
 
 impl Client {
+    /// True once the server's ACK has arrived and data can flow.
+    pub fn is_ready(&self) -> bool {
+        self.session.is_some()
+    }
+
     /// None until the server's ACK has arrived; the caller drops the packet.
     pub fn seal(&mut self, plaintext: &[u8]) -> Option<Vec<u8>> {
         self.session.as_mut().map(|s| s.seal(plaintext))
@@ -331,6 +336,7 @@ mod tests {
         let (mut client, init) = connect(server.public()).unwrap();
         let (session, ack) = server.accept(&init).unwrap();
         assert_eq!(client.receive(&ack), Ok(None));
+        assert!(client.is_ready());
         (client, session)
     }
 
@@ -348,6 +354,7 @@ mod tests {
     #[test]
     fn nothing_is_sent_before_the_ack() {
         let (mut c, _init) = connect(ServerKeys::generate().public()).unwrap();
+        assert!(!c.is_ready());
         assert!(c.seal(b"early").is_none());
     }
 
@@ -365,6 +372,7 @@ mod tests {
         let (mut c, init) = connect(ServerKeys::generate().public()).unwrap();
         let (_, ack) = ServerKeys::generate().accept(&init).unwrap();
         assert!(c.receive(&ack).is_err());
+        assert!(!c.is_ready());
         assert!(c.seal(b"secret").is_none());
     }
 
