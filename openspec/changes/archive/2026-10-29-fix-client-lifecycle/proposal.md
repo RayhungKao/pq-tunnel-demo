@@ -15,6 +15,9 @@ Writing the first instrumented tests found three more bugs, all in stopping a co
 
 - a read blocked on `tun0` does not return when another thread closes it, so Disconnect on an idle
   tunnel hung until the next packet happened to arrive, and the native session stayed allocated
+
+  > **Correction (verify-client-fixes):** this cause was never reproduced and is wrong. The tun fd is non-blocking; the old loop spun on empty reads instead of blocking. See `openspec/changes/archive/*-verify-client-fixes/design.md` D1.
+
 - a Disconnect sent before the new connection had opened its socket was lost, and the connection
   kept running
 - Disconnect followed quickly by Connect stopped the new connection too, because `stopSelf()`

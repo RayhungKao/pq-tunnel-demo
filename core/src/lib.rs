@@ -24,6 +24,9 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 #[cfg(target_os = "android")]
 mod android;
+// Used by the JNI bindings; built and tested on every platform.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+mod handles;
 
 pub const INIT: u8 = 1;
 pub const DATA: u8 = 2;

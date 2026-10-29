@@ -20,7 +20,8 @@ on the `Pixel_3a_API_32_arm64-v8a` emulator). Checks marked "by hand" used `adb`
 
 ## 3. Stopping (found by the new tests)
 
-- [x] 3.1 Poll `tun0` with a 500 ms timeout (design D3). Found when the cleanup of
+- [x] 3.1 Poll `tun0` with a 500 ms timeout (design D3). **Correction:** the stated cause is wrong and the listed test passes
+  without the poll; see verify-client-fixes. Found when the cleanup of
   `withoutAnAckItSendsInitAndKeepsWaiting` timed out in "Waiting"; `disconnectEndsAnIdleTunnelQuickly`
   was added after the fix to cover it and has not been run against the old code
 - [x] 3.2 `Run` object per connection (design D4); instrumented

@@ -1,6 +1,9 @@
 package io.github.rayhungkao.pqtunnel
 
-/** The Rust tunnel core (core/src/android.rs). A session is an opaque handle; call [free] once. */
+/**
+ * The Rust tunnel core (core/src/android.rs). A session is a numbered handle; call [free] when done.
+ * Every call with a freed or unknown handle returns null or false, never touching freed memory.
+ */
 object Native {
     init {
         System.loadLibrary("tunnel_core")
@@ -8,7 +11,8 @@ object Native {
 
     /** Returns 0 when [serverPublic] is not a valid server key. */
     @JvmStatic external fun connect(serverPublic: ByteArray): Long
-    @JvmStatic external fun initPacket(session: Long): ByteArray
+    /** Returns null for a freed or unknown handle. */
+    @JvmStatic external fun initPacket(session: Long): ByteArray?
     /** Returns null until the relay's ACK has arrived; drop the packet then. */
     @JvmStatic external fun seal(session: Long, ipPacket: ByteArray): ByteArray?
 

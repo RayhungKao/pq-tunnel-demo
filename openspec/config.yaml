@@ -30,3 +30,10 @@ schema: spec-driven
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+rules:
+  design:
+    - State a root cause only if it was reproduced, and say how (log, measurement, experiment)
+  tasks:
+    - Each test listed as covering a fix names how it was shown to fail with the fix reverted
+    - Mark anything not checked as "not verified" and say why

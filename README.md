@@ -44,7 +44,7 @@ tunnel. The relay answers only pings to the gateway 10.66.0.1 and forwards nothi
 | X25519, HKDF-SHA256, HMAC-SHA256, ChaCha20-Poly1305 | No forward secrecy if the server's long-term key is stolen |
 | Android `VpnService` with a real tun interface and routes | Clients are anonymous; sessions never expire |
 | Rust core cross-compiled for arm64 and x86_64, called over JNI | The relay answers pings to 10.66.0.1 and forwards nothing else |
-| 17 Rust tests, 5 JVM tests and 5 instrumented Android tests, plus checks by hand on an emulator | Android only; an iOS client would reuse the same Rust core |
+| 20 Rust tests, 7 JVM tests and 7 instrumented Android tests, plus checks by hand on an emulator | Android only; an iOS client would reuse the same Rust core |
 
 ## Protocol
 
@@ -111,13 +111,17 @@ The short version:
   AEAD key derived from the INIT would be used twice with the same nonce; HMAC has no nonce.
 - **Repeated INIT returns the original ACK.** A fresh session would start with an empty replay
   window and accept recorded packets again.
-- **Native handle lifetime.** Kotlin holds the Rust session as an opaque `Long`. Each connection
-  frees it only after both packet loops have ended, closes only the socket and interface it created,
-  and the INIT resend thread copies the INIT bytes so it never touches the handle.
-- **Stopping that cannot get lost.** Closing `tun0` does not wake a thread blocked reading it, so
-  the sender waits with `Os.poll` and a 500 ms timeout. Each connection is a `Run` object that a stop
-  marks and closes, and that checks the mark after opening its socket and interface, so a stop that
-  arrives early is not lost. `stopSelf(startId)` keeps a Connect that arrived after a Disconnect.
+- **A freed native session cannot be used.** Kotlin holds a numbered handle, not a pointer. The
+  Rust side keeps sessions in a table (`core/src/handles.rs`), so a call with a freed or unknown
+  handle returns null or false instead of reading freed memory. A use-after-free would crash only
+  sometimes, so a test could not reliably catch one; the table makes it impossible instead.
+- **No busy loop.** The tun fd from `establish()` is non-blocking (`O_NONBLOCK`, read from
+  `/proc/<pid>/fdinfo`), so reading it in a loop spins on empty reads. Measured: 188 clock ticks of
+  CPU in 2 idle seconds without a wait, 0 with `Os.poll` and a 500 ms timeout.
+- **Stopping that cannot get lost.** Each connection is a `Run` object that a stop marks and closes,
+  and that checks the mark after the name lookup and after opening its socket and interface, so a
+  stop that arrives early is not lost and never brings up `tun0`. `stopSelf(startId)` keeps a
+  Connect that arrived after a Disconnect.
 - **The status only claims what the client knows.** "Connected" waits for the relay's ACK; before it
   the screen says "Waiting for the relay". An error that ends a connection stays on screen.
 - **Build checks that cannot be skipped.** The `keys/server.pub` check runs first in the Rust build
@@ -209,39 +213,47 @@ the rest of the phone's traffic is untouched.
 
 ## Tests and verification
 
-27 automated tests, each named after the spec scenario it covers.
+34 automated tests. The 7 instrumented tests, the parser test for odd input and the handle-table
+test for freed handles were each run once with their fix reverted, and failed; the mutations and
+results are listed in
+[`verify-client-fixes/tasks.md`](openspec/changes/archive/2026-10-29-verify-client-fixes/tasks.md).
+The Rust protocol and relay tests have not been mutation-checked.
 
-- **Rust core (10), `cargo test`:** round trips in both directions, no data and not ready before
-  the ACK, key save/load, ACKs from the wrong server or with a forged MAC, a restarted server that
+- **Rust core (13), `cargo test`:** the handle table (a freed handle finds nothing, ids are never 0
+  or reused, a call in progress keeps the session alive); round trips in both directions, no data
+  and not ready before the ACK, key save/load, ACKs from the wrong server or with a forged MAC, a restarted server that
   must derive new keys and must not be switched back, tampered packets, replay and reordering, the
   window edge, malformed handshakes.
 - **Relay (7), `cargo test`:** over real UDP sockets, an end-to-end ping, a replayed INIT that must
   not reopen recorded packets, replies to a client's new address, and recovery after a relay
   restart; plus ICMP checksums, pings to other addresses, and IP headers too short to read.
-- **Relay address parser (5), `./gradlew test`:** host and port, default port, IPv6 in brackets and
-  bare, and ten inputs that must be refused.
-- **TunnelService (5), `./gradlew connectedDebugAndroidTest`:** the real service against a fake
-  relay, a UDP socket on the device that receives the INIT but cannot answer it. INIT is sent and
-  the status stays "Waiting"; an unresolvable host keeps its error on screen; an IPv6 relay gets the
-  INIT; an idle tunnel disconnects within 2 seconds; ten rounds of quick Connect and Disconnect end
-  cleanly. The tests run in the app's process, so a native crash fails them. Writing them found
-  three stopping bugs, fixed in
-  [`fix-client-lifecycle`](openspec/changes/archive/2026-10-29-fix-client-lifecycle/proposal.md).
+- **Relay address parser (7), `./gradlew test`:** host and port, default port, IPv6 in brackets and
+  bare, an embedded IPv4 address in brackets, and sixteen inputs that must be refused, such as
+  `10.0.2.2:51820:1`, `[10.0.2.2]:4000` and `10.0.2.2:+80`.
+- **TunnelService (7), `./gradlew connectedDebugAndroidTest`:** the real service against a fake
+  relay, a UDP socket on the device that receives the INIT and can send stray datagrams, but cannot
+  answer with an ACK. INIT is sent and the status stays "Waiting"; a stray datagram does not make it
+  "Connected"; an idle tunnel uses less than 20 ticks of CPU in 2 seconds; an unresolvable host
+  keeps its error on screen; an IPv6 relay gets the INIT; an idle tunnel disconnects within 2
+  seconds; ten rounds of quick Connect and Disconnect end cleanly.
 
 Checked by hand on an API 32 arm64 emulator with the real relay:
 
 | Check | Result |
 |---|---|
 | Relay `10.0.2.2:` | "Bad relay address", app keeps running |
+| Relay `relay.invalid:51820` | "Error: Unable to resolve host ...", kept on screen |
 | Relay not running, Connect | "Waiting for the relay at 10.0.2.2:51820" |
 | Start the relay, wait 11 seconds | "Connected", with no user action |
 | `ping -c 3 10.66.0.1`, wait 1.5 seconds | 3 of 3 answered; screen shows 4 sent, 3 received |
 | Restart the relay, wait 11 seconds, ping | 3 of 3 answered, no user action |
 | Tap Connect twice, ping | "Connected", 3 of 3 answered |
-| Disconnect | "Disconnected" within 1.5 seconds, `tun0` removed, no crash in logcat |
-| Build a copy without `keys/`, PATH `/usr/bin:/bin:/usr/sbin:/sbin` | Fails in 1 second with the keygen hint, before any Rust compiles |
+| Disconnect | "Disconnected" within 1.5 seconds, `tun0` removed, no `tunnel` thread left, no crash in logcat |
+| Build a copy without `keys/`, PATH `/usr/bin:/bin:/usr/sbin:/sbin` | Fails in 1 second with the keygen hint, before any Rust compiles (checked at 4d8d823; the build file has not changed since) |
+| Stop during a 1.5-second name lookup (injected sleep, experiment) | `tun0` is never brought up; before the fix, `establish()` ran after the stop |
 
-Not reproduced: a failed send during a network switch (the emulator does not make `send` fail).
+Not verified: a failed send during a network switch (the emulator does not make `send` fail), a
+real slow resolver (only an injected sleep), and a physical phone.
 
 ## Specs (OpenSpec)
 

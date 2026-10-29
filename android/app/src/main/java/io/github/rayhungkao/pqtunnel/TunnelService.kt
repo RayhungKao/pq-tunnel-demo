@@ -13,6 +13,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
@@ -90,11 +91,15 @@ class TunnelService : VpnService() {
         // Shown instead of "Disconnected" when the run ends, so the user sees why it stopped.
         var error: String? = null
         try {
+            // Look the name up before opening anything: it can take seconds, and a stop during it
+            // must end the run here, not after establish() has brought up tun0.
+            val address = InetAddress.getByName(host)
+            if (run.stopped) return
             val sock = DatagramSocket().also { run.socket = it }
             if (run.stopped) return
             // Keep the tunnel's own packets outside the tunnel, or they would loop back into it.
             protect(sock)
-            sock.connect(InetSocketAddress(host, port))
+            sock.connect(InetSocketAddress(address, port))
 
             val tunFd = Builder()
                 .setSession("PQ Tunnel Demo")
@@ -108,7 +113,7 @@ class TunnelService : VpnService() {
             // "Connected" waits for the relay's ACK: before it, nothing proves the relay is there.
             report(run, "Waiting for the relay at $host:$port")
 
-            val init = Native.initPacket(session)
+            val init = Native.initPacket(session) ?: throw IOException("Native session is gone")
             // UDP can drop the INIT, and a restarted relay forgets every session, so keep resending
             // it. A live relay answers with its original ACK; a restarted one sends a new ACK, and
             // the core switches to that relay's fresh keys.
@@ -148,8 +153,9 @@ class TunnelService : VpnService() {
                 events = OsConstants.POLLIN.toShort()
             }
             try {
-                // A read blocked on tun0 does not return when another thread closes it, so wait
-                // with a timeout and stop once stopTunnel() has closed the socket.
+                // The tun fd from establish() is non-blocking (O_NONBLOCK, read from fdinfo), so a
+                // bare read loop spins on empty reads and keeps a core busy. Wait in poll instead,
+                // with a timeout, and stop once stopTunnel() has closed the socket.
                 while (!sock.isClosed) {
                     if (!pollQuietly(readable)) continue
                     val n = fromPhone.read(buf)
@@ -164,11 +170,12 @@ class TunnelService : VpnService() {
                 // stopTunnel() closed the interface.
             }
         } catch (e: Exception) {
-            error = "Error: ${e.message ?: e.javaClass.simpleName}"
+            // After a stop, failures are expected (closed socket, interrupted lookup) and not news.
+            if (!run.stopped) error = "Error: ${e.message ?: e.javaClass.simpleName}"
         } finally {
             run.socket?.close()
             run.tun?.close()
-            // Both packet loops must have stopped before the handle is freed.
+            // Both packet loops have stopped; a late call with the freed handle would get null.
             receiver?.join()
             Native.free(session)
             report(run, error ?: "Disconnected")

@@ -34,6 +34,8 @@ status, since the client was connected before and is again.
 
 ### D3. Poll `tun0` instead of blocking in `read()`
 
+> **Correction (verify-client-fixes):** this cause was never reproduced and is wrong. The tun fd is non-blocking; the old loop spun on empty reads instead of blocking. See `openspec/changes/archive/*-verify-client-fixes/design.md` D1.
+
 On Linux, closing a file descriptor does not wake a thread blocked reading it; the thread wakes on
 the next packet, and an idle tunnel may get none. Alternatives:
 
@@ -66,7 +68,9 @@ exists.
 The test opens a UDP socket on the device and passes its address as the relay. It cannot answer
 with an ACK, so it checks what the client does before one: the INIT arrives, the status stays
 "Waiting", errors stay visible, and stopping works. The tests run in the app's process, so a native
-crash from freeing the session too early ends the run as a failure. Consent comes from
+crash from freeing the session too early ends the run as a failure. **Correction (verify-client-fixes):** no test drove
+the receiver at stop time, so freeing early went unnoticed; the raw pointer was replaced by a handle
+table instead. Consent comes from
 `appops set ... ACTIVATE_VPN allow` plus `VpnService.prepare()`, as `MainActivity` does; without
 `prepare()` Android does not treat the app as the prepared VPN and `establish()` returns null.
 

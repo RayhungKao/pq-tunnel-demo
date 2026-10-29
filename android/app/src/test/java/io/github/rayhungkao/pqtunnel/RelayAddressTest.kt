@@ -28,6 +28,20 @@ class RelayAddressTest {
     }
 
     @Test
+    fun ipv6WithAnEmbeddedIpv4AddressInBrackets() {
+        assertEquals("::ffff:10.0.2.2" to 4000, parseRelay("[::ffff:10.0.2.2]:4000"))
+    }
+
+    @Test
+    fun extraColonsAndOddPortsAreRefused() {
+        // Two colons used to be taken for a bare IPv6 address; brackets used to take any text.
+        for (bad in listOf("10.0.2.2:51820:1", "relay.example.com:4000:", "[10.0.2.2]:4000", "[::1]:+80",
+                "10.0.2.2:+80", "fe80::1:zz")) {
+            assertNull("\"$bad\" should be refused", parseRelay(bad))
+        }
+    }
+
+    @Test
     fun badInputIsRefused() {
         for (bad in listOf("", ":51820", "10.0.2.2:", "10.0.2.2:abc", "10.0.2.2:0", "10.0.2.2:65536",
                 "[::1", "[::1]4000", "[::1]:", "[]:4000")) {
