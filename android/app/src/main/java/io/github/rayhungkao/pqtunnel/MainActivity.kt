@@ -53,19 +53,29 @@ class MainActivity : ComponentActivity() {
         })
     }
 
+    // Packet counts change on every packet, so they are redrawn once a second, not per packet.
+    private val refresh = object : Runnable {
+        override fun run() {
+            render()
+            status.postDelayed(this, 1000)
+        }
+    }
+
     override fun onStart() {
         super.onStart()
-        TunnelService.listener = { runOnUiThread { render(it) } }
-        render(TunnelService.lastStatus)
+        TunnelService.listener = { runOnUiThread { render() } }
+        refresh.run()
     }
 
     override fun onStop() {
         TunnelService.listener = null
+        status.removeCallbacks(refresh)
         super.onStop()
     }
 
-    private fun render(text: String) {
-        status.text = "$text\nSent ${TunnelService.packetsSent} · received ${TunnelService.packetsReceived} packets\n" +
+    private fun render() {
+        status.text = "${TunnelService.lastStatus}\n" +
+            "Sent ${TunnelService.packetsSent} · received ${TunnelService.packetsReceived} packets\n" +
             "Try: ping 10.66.0.1"
     }
 

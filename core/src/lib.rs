@@ -1,19 +1,24 @@
-//! Tunnel crypto: a one-message hybrid handshake (X25519 + ML-KEM-768) and an AEAD packet layer.
+//! Tunnel crypto: a hybrid handshake (X25519 + ML-KEM-768) and an AEAD packet layer.
 //!
-//! The client knows the server's public keys in advance (pinned), sends one INIT packet, and both
-//! sides derive two ChaCha20-Poly1305 keys from both shared secrets. An attacker has to break both
-//! X25519 and ML-KEM to read the traffic, the same "hybrid" idea PQConnect uses.
+//! The client knows the server's public keys in advance (pinned) and sends INIT. Only the real
+//! server can derive the shared secrets from it; it answers with ACK, which carries 32 fresh random
+//! bytes and a MAC (a keyed checksum) that proves the server derived them. The traffic keys mix
+//! both shared secrets with that random, so an attacker has to break both X25519 and ML-KEM (the
+//! "hybrid" idea PQConnect uses), and every relay process derives new keys even for a repeated
+//! INIT: a restarted relay never reuses a (key, nonce) pair, and old recordings cannot be replayed.
 //!
 //! Packets:
 //!   INIT: [1][client X25519 pub, 32][ML-KEM ciphertext, 1088]
 //!   DATA: [2][session id, 8][counter, 8][ciphertext + 16-byte tag]
+//!   ACK:  [3][session id, 8][server random, 32][HMAC-SHA256 tag, 16]
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use ml_kem::kem::{Decapsulate, Encapsulate};
 use ml_kem::{Ciphertext, Encoded, EncodedSizeUser, KemCore, MlKem768};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -22,6 +27,7 @@ mod android;
 
 pub const INIT: u8 = 1;
 pub const DATA: u8 = 2;
+pub const ACK: u8 = 3;
 
 type Ek = <MlKem768 as KemCore>::EncapsulationKey;
 type Dk = <MlKem768 as KemCore>::DecapsulationKey;
@@ -31,6 +37,7 @@ pub const EK_LEN: usize = 1184;
 pub const DK_LEN: usize = 2400;
 pub const CT_LEN: usize = 1088;
 pub const INIT_LEN: usize = 1 + X25519_LEN + CT_LEN;
+const ACK_LEN: usize = 1 + 8 + 32 + 16;
 const HEADER_LEN: usize = 1 + 8 + 8;
 pub const PUBLIC_LEN: usize = X25519_LEN + EK_LEN;
 pub const SECRET_LEN: usize = X25519_LEN + DK_LEN;
@@ -43,6 +50,8 @@ pub enum Error {
     Decrypt,
     Replay,
     UnknownSession,
+    /// DATA arrived before the server's ACK.
+    NotReady,
 }
 
 /// The server's long-term keys. `to_bytes`/`from_bytes` are what the relay stores on disk.
@@ -85,9 +94,8 @@ impl ServerKeys {
         &self.public
     }
 
-    /// Answers an INIT packet with a session. The session id is derived from the packet, so the
-    /// server needs no reply before the client can send data.
-    pub fn accept(&self, init: &[u8]) -> Result<Session, Error> {
+    /// Answers an INIT packet with a new session and the ACK packet to send back.
+    pub fn accept(&self, init: &[u8]) -> Result<(Session, Vec<u8>), Error> {
         if init.len() != INIT_LEN {
             return Err(Error::BadLength);
         }
@@ -98,13 +106,67 @@ impl ServerKeys {
         let x_ss = self.x25519.diffie_hellman(&PublicKey::from(eph));
         let ct = Ciphertext::<MlKem768>::try_from(&init[1 + X25519_LEN..]).map_err(|_| Error::BadKey)?;
         let k_ss = self.dk.decapsulate(&ct).map_err(|_| Error::BadKey)?;
-        Ok(Session::derive(x_ss.as_bytes(), k_ss.as_slice(), &init[1..], &self.public, false))
+        let hs = Handshake::derive(x_ss.as_bytes(), k_ss.as_slice(), &init[1..], &self.public);
+
+        let mut random = [0u8; 32];
+        OsRng.fill_bytes(&mut random);
+        let mut ack = vec![ACK];
+        ack.extend_from_slice(&hs.id);
+        ack.extend_from_slice(&random);
+        ack.extend_from_slice(&hs.ack_mac(&random).finalize().into_bytes()[..16]);
+        Ok((hs.session(&random, false), ack))
     }
 }
 
-/// Starts a client session against pinned server public keys. Returns the session and the INIT
-/// packet to send.
-pub fn connect(server_public: &[u8]) -> Result<(Session, Vec<u8>), Error> {
+/// Secrets both sides derive from one INIT. They never encrypt traffic themselves.
+struct Handshake {
+    base: [u8; 32],
+    mac_key: [u8; 32],
+    id: [u8; 8],
+}
+
+impl Handshake {
+    fn derive(x_ss: &[u8], k_ss: &[u8], transcript: &[u8], server_public: &[u8]) -> Self {
+        let ikm = [x_ss, k_ss].concat();
+        // Binding the transcript and the server's keys stops a key-substitution attacker from
+        // making two different handshakes agree on one key.
+        let info = Sha256::new().chain_update(transcript).chain_update(server_public).finalize();
+        let mut okm = [0u8; 72];
+        Hkdf::<Sha256>::new(Some(b"pq-tunnel-demo v2"), &ikm)
+            .expand(&info, &mut okm)
+            .expect("72 bytes is a valid HKDF length");
+        Self {
+            base: okm[..32].try_into().unwrap(),
+            mac_key: okm[32..64].try_into().unwrap(),
+            id: okm[64..].try_into().unwrap(),
+        }
+    }
+
+    /// HMAC, not the AEAD: a restarted relay signs a second ACK for the same INIT, and an AEAD key
+    /// used twice with the same nonce would let an attacker forge tags.
+    fn ack_mac(&self, random: &[u8; 32]) -> Hmac<Sha256> {
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.mac_key).expect("HMAC takes any key length");
+        mac.update(&[ACK]);
+        mac.update(&self.id);
+        mac.update(random);
+        mac
+    }
+
+    fn session(&self, random: &[u8; 32], is_client: bool) -> Session {
+        let mut okm = [0u8; 64];
+        Hkdf::<Sha256>::new(Some(random), &self.base)
+            .expand(b"traffic", &mut okm)
+            .expect("64 bytes is a valid HKDF length");
+        let c2s = ChaCha20Poly1305::new(Key::from_slice(&okm[..32]));
+        let s2c = ChaCha20Poly1305::new(Key::from_slice(&okm[32..]));
+        let (send, recv) = if is_client { (c2s, s2c) } else { (s2c, c2s) };
+        Session { id: self.id, send, recv, send_counter: 0, window: ReplayWindow::default() }
+    }
+}
+
+/// Starts a client against pinned server public keys. Returns the client and the INIT packet,
+/// which the caller sends (and may resend; the relay answers repeats with the same ACK).
+pub fn connect(server_public: &[u8]) -> Result<(Client, Vec<u8>), Error> {
     if server_public.len() != PUBLIC_LEN {
         return Err(Error::BadLength);
     }
@@ -118,10 +180,58 @@ pub fn connect(server_public: &[u8]) -> Result<(Session, Vec<u8>), Error> {
     let mut init = vec![INIT];
     init.extend_from_slice(PublicKey::from(&eph).as_bytes());
     init.extend_from_slice(&ct);
-    let session = Session::derive(x_ss.as_bytes(), k_ss.as_slice(), &init[1..], server_public, true);
-    Ok((session, init))
+    let handshake = Handshake::derive(x_ss.as_bytes(), k_ss.as_slice(), &init[1..], server_public);
+    Ok((Client { handshake, session: None, current: None, used: Vec::new() }, init))
 }
 
+pub struct Client {
+    handshake: Handshake,
+    session: Option<Session>,
+    current: Option<[u8; 32]>,
+    /// Server randoms already used. A replayed old ACK must not switch back to old keys, which
+    /// would reopen packets recorded under them.
+    used: Vec<[u8; 32]>,
+}
+
+impl Client {
+    /// None until the server's ACK has arrived; the caller drops the packet.
+    pub fn seal(&mut self, plaintext: &[u8]) -> Option<Vec<u8>> {
+        self.session.as_mut().map(|s| s.seal(plaintext))
+    }
+
+    /// Handles a packet from the server: an ACK (re)keys the client and yields None, DATA yields
+    /// the IP packet inside.
+    pub fn receive(&mut self, packet: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        if packet.first() == Some(&ACK) {
+            return self.accept_ack(packet).map(|_| None);
+        }
+        self.session.as_mut().ok_or(Error::NotReady)?.open(packet).map(Some)
+    }
+
+    fn accept_ack(&mut self, ack: &[u8]) -> Result<(), Error> {
+        if ack.len() != ACK_LEN {
+            return Err(Error::BadLength);
+        }
+        if ack[1..9] != self.handshake.id {
+            return Err(Error::UnknownSession);
+        }
+        let random: [u8; 32] = ack[9..41].try_into().unwrap();
+        self.handshake.ack_mac(&random).verify_truncated_left(&ack[41..]).map_err(|_| Error::Decrypt)?;
+        if self.current == Some(random) {
+            return Ok(()); // the relay answering a resent INIT
+        }
+        if self.used.contains(&random) {
+            return Err(Error::Replay);
+        }
+        // A new random means a new relay process (a restart): switch to its keys.
+        self.session = Some(self.handshake.session(&random, true));
+        self.current = Some(random);
+        self.used.push(random);
+        Ok(())
+    }
+}
+
+/// One direction pair of traffic keys plus counters.
 pub struct Session {
     pub id: [u8; 8],
     send: ChaCha20Poly1305,
@@ -131,21 +241,6 @@ pub struct Session {
 }
 
 impl Session {
-    fn derive(x_ss: &[u8], k_ss: &[u8], transcript: &[u8], server_public: &[u8], is_client: bool) -> Self {
-        let ikm = [x_ss, k_ss].concat();
-        // Binding the transcript and the server's keys stops a key-substitution attacker from
-        // making two different handshakes agree on one key.
-        let info = Sha256::new().chain_update(transcript).chain_update(server_public).finalize();
-        let mut okm = [0u8; 72];
-        Hkdf::<Sha256>::new(Some(b"pq-tunnel-demo v1"), &ikm)
-            .expand(&info, &mut okm)
-            .expect("72 bytes is a valid HKDF length");
-        let c2s = ChaCha20Poly1305::new(Key::from_slice(&okm[..32]));
-        let s2c = ChaCha20Poly1305::new(Key::from_slice(&okm[32..64]));
-        let (send, recv) = if is_client { (c2s, s2c) } else { (s2c, c2s) };
-        Self { id: okm[64..].try_into().unwrap(), send, recv, send_counter: 0, window: ReplayWindow::default() }
-    }
-
     pub fn seal(&mut self, plaintext: &[u8]) -> Vec<u8> {
         let counter = self.send_counter;
         // Counters never wrap in practice (2^64 packets); a real protocol rekeys long before.
@@ -232,18 +327,28 @@ impl ReplayWindow {
 mod tests {
     use super::*;
 
-    fn pair() -> (Session, Session) {
-        let server = ServerKeys::generate();
-        let (client, init) = connect(server.public()).unwrap();
-        (client, server.accept(&init).unwrap())
+    fn handshake(server: &ServerKeys) -> (Client, Session) {
+        let (mut client, init) = connect(server.public()).unwrap();
+        let (session, ack) = server.accept(&init).unwrap();
+        assert_eq!(client.receive(&ack), Ok(None));
+        (client, session)
+    }
+
+    fn pair() -> (Client, Session) {
+        handshake(&ServerKeys::generate())
     }
 
     #[test]
     fn both_directions_round_trip() {
         let (mut c, mut s) = pair();
-        assert_eq!(c.id, s.id);
-        assert_eq!(s.open(&c.seal(b"ping")).unwrap(), b"ping");
-        assert_eq!(c.open(&s.seal(b"pong")).unwrap(), b"pong");
+        assert_eq!(s.open(&c.seal(b"ping").unwrap()).unwrap(), b"ping");
+        assert_eq!(c.receive(&s.seal(b"pong")), Ok(Some(b"pong".to_vec())));
+    }
+
+    #[test]
+    fn nothing_is_sent_before_the_ack() {
+        let (mut c, _init) = connect(ServerKeys::generate().public()).unwrap();
+        assert!(c.seal(b"early").is_none());
     }
 
     #[test]
@@ -251,33 +356,64 @@ mod tests {
         let server = ServerKeys::generate();
         let loaded = ServerKeys::from_bytes(&server.to_bytes()).unwrap();
         assert_eq!(server.public(), loaded.public());
-        let (mut c, init) = connect(server.public()).unwrap();
-        let mut s = loaded.accept(&init).unwrap();
-        assert_eq!(s.open(&c.seal(b"hi")).unwrap(), b"hi");
+        let (mut c, mut s) = handshake(&loaded);
+        assert_eq!(s.open(&c.seal(b"hi").unwrap()).unwrap(), b"hi");
     }
 
     #[test]
-    fn wrong_server_cannot_read() {
+    fn ack_from_the_wrong_server_is_rejected() {
         let (mut c, init) = connect(ServerKeys::generate().public()).unwrap();
-        let mut other = ServerKeys::generate().accept(&init).unwrap();
-        assert_ne!(other.open(&c.seal(b"secret")), Ok(b"secret".to_vec()));
+        let (_, ack) = ServerKeys::generate().accept(&init).unwrap();
+        assert!(c.receive(&ack).is_err());
+        assert!(c.seal(b"secret").is_none());
+    }
+
+    #[test]
+    fn forged_ack_is_rejected() {
+        let server = ServerKeys::generate();
+        let (mut c, init) = connect(server.public()).unwrap();
+        let (_, mut ack) = server.accept(&init).unwrap();
+        ack[20] ^= 1; // inside the server random
+        assert_eq!(c.receive(&ack), Err(Error::Decrypt));
+    }
+
+    #[test]
+    fn restarted_server_derives_new_keys() {
+        // Two relay processes with the same long-term key both answer the same INIT.
+        let bytes = ServerKeys::generate().to_bytes();
+        let (first, second) = (ServerKeys::from_bytes(&bytes).unwrap(), ServerKeys::from_bytes(&bytes).unwrap());
+        let (mut c, init) = connect(first.public()).unwrap();
+        let (mut s1, ack1) = first.accept(&init).unwrap();
+        c.receive(&ack1).unwrap();
+        let reply1 = s1.seal(b"before restart");
+        let recorded = c.seal(b"recorded").unwrap();
+
+        let (mut s2, ack2) = second.accept(&init).unwrap();
+        c.receive(&ack2).unwrap();
+        // Same counter 0, but a new key: no (key, nonce) pair is used twice.
+        assert_ne!(s2.seal(b"before restart"), reply1);
+        assert_eq!(s2.open(&recorded), Err(Error::Decrypt));
+        assert_eq!(s2.open(&c.seal(b"after").unwrap()).unwrap(), b"after");
+        // An attacker replaying the first ACK cannot switch the client back to the old keys.
+        assert_eq!(c.receive(&ack1), Err(Error::Replay));
+        assert_eq!(c.receive(&ack2), Ok(None));
     }
 
     #[test]
     fn tampering_is_rejected() {
         let (mut c, mut s) = pair();
-        let mut p = c.seal(b"data");
+        let mut p = c.seal(b"data").unwrap();
         *p.last_mut().unwrap() ^= 1;
         assert_eq!(s.open(&p), Err(Error::Decrypt));
         // A forged packet must not burn its counter: the real one still opens.
-        p.last_mut().map(|b| *b ^= 1);
+        *p.last_mut().unwrap() ^= 1;
         assert_eq!(s.open(&p).unwrap(), b"data");
     }
 
     #[test]
     fn replays_are_rejected_but_reordering_is_fine() {
         let (mut c, mut s) = pair();
-        let p: Vec<_> = (0..3).map(|i| c.seal(&[i])).collect();
+        let p: Vec<_> = (0..3).map(|i| c.seal(&[i]).unwrap()).collect();
         assert_eq!(s.open(&p[2]).unwrap(), [2]);
         assert_eq!(s.open(&p[0]).unwrap(), [0]);
         assert_eq!(s.open(&p[0]), Err(Error::Replay));
@@ -288,9 +424,9 @@ mod tests {
     #[test]
     fn packets_older_than_the_window_are_rejected() {
         let (mut c, mut s) = pair();
-        let old = c.seal(b"old");
+        let old = c.seal(b"old").unwrap();
         for _ in 0..64 {
-            s.open(&c.seal(b"x")).unwrap();
+            s.open(&c.seal(b"x").unwrap()).unwrap();
         }
         assert_eq!(s.open(&old), Err(Error::Replay));
     }

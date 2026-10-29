@@ -10,6 +10,7 @@ import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 /**
@@ -53,80 +54,110 @@ class TunnelService : VpnService() {
     }
 
     private fun runTunnel(relay: String) {
-        val (host, port) = relay.split(":").let { it[0] to it.getOrElse(1) { "51820" }.toInt() }
-        val serverPublic = Base64.decode(assets.open("server.pub").readBytes(), Base64.DEFAULT)
-        val session = Native.connect(serverPublic)
-        if (session == 0L) {
-            report("Bad server key in the APK")
+        // A newer run makes this one's late status messages stale, so they are dropped.
+        val run = generation.incrementAndGet()
+        val parts = relay.split(":")
+        val host = parts[0]
+        val port = parts.getOrElse(1) { "51820" }.toIntOrNull()
+        if (host.isEmpty() || port == null || port !in 1..65535) {
+            report(run, "Bad relay address: $relay")
             return
         }
+        val session = try {
+            Native.connect(Base64.decode(assets.open("server.pub").readBytes(), Base64.DEFAULT))
+        } catch (e: Exception) {
+            0L // missing asset or broken base64
+        }
+        if (session == 0L) {
+            report(run, "No valid server key in the APK")
+            return
+        }
+        // This run's own socket and interface. Cleanup uses these, never the fields, which a newer
+        // run may already have replaced.
+        var udp: DatagramSocket? = null
+        var iface: ParcelFileDescriptor? = null
+        var receiver: Thread? = null
         try {
-            val udp = DatagramSocket().also { socket = it }
+            val sock = DatagramSocket().also { udp = it; socket = it }
             // Keep the tunnel's own packets outside the tunnel, or they would loop back into it.
-            protect(udp)
-            udp.connect(InetSocketAddress(host, port))
+            protect(sock)
+            sock.connect(InetSocketAddress(host, port))
 
-            val iface = Builder()
+            val tunFd = Builder()
                 .setSession("PQ Tunnel Demo")
                 .addAddress("10.66.0.2", 32)
                 .addRoute("10.66.0.0", 24)
                 // Leaves room for the 33-byte tunnel header inside a typical 1500-byte path.
                 .setMtu(1280)
                 .establish() ?: throw IOException("VPN permission was revoked")
-            tun = iface
+            iface = tunFd
+            tun = tunFd
+            report(run, "Connected to $host:$port (X25519 + ML-KEM-768)")
 
             val init = Native.initPacket(session)
-            udp.send(DatagramPacket(init, init.size))
-            report("Connected to $host:$port (X25519 + ML-KEM-768)")
+            // UDP can drop the INIT, and a restarted relay forgets every session, so keep resending
+            // it. A live relay answers with its original ACK; a restarted one sends a new ACK, and
+            // the core switches to that relay's fresh keys.
+            thread(name = "tunnel-init", isDaemon = true) {
+                while (!sock.isClosed) {
+                    sendQuietly(sock, init)
+                    Thread.sleep(INIT_RESEND_MS)
+                }
+            }
 
-            val toPhone = FileOutputStream(iface.fileDescriptor)
-            val receiver = thread(name = "tunnel-rx") {
+            val toPhone = FileOutputStream(tunFd.fileDescriptor)
+            receiver = thread(name = "tunnel-rx") {
                 val buf = ByteArray(65535)
                 val packet = DatagramPacket(buf, buf.size)
                 try {
                     while (true) {
-                        udp.receive(packet)
+                        sock.receive(packet)
                         Native.open(session, buf.copyOf(packet.length))?.let {
                             toPhone.write(it)
-                            count(received = 1)
+                            packetsReceived++ // only this thread writes it
                         }
                     }
                 } catch (_: IOException) {
+                    // stopTunnel() closed the socket.
                 }
             }
 
-            val fromPhone = FileInputStream(iface.fileDescriptor)
+            val fromPhone = FileInputStream(tunFd.fileDescriptor)
             val buf = ByteArray(65535)
             try {
                 while (true) {
                     val n = fromPhone.read(buf)
-                    if (n <= 0) continue
-                    val sealed = Native.seal(session, buf.copyOf(n))
-                    udp.send(DatagramPacket(sealed, sealed.size))
-                    count(sent = 1)
+                    if (n < 0) break
+                    if (n == 0) continue
+                    // A send fails for a moment while the phone switches networks: drop that one
+                    // packet and keep the tunnel.
+                    val sealed = Native.seal(session, buf.copyOf(n)) ?: continue // no ACK yet
+                    if (sendQuietly(sock, sealed)) packetsSent++
                 }
             } catch (_: IOException) {
+                // stopTunnel() closed the interface.
             }
-            udp.close()
-            receiver.join()
         } catch (e: Exception) {
-            report("Error: ${e.message}")
+            report(run, "Error: ${e.message}")
         } finally {
-            socket?.close()
-            tun?.close()
-            // Both loops have stopped, so nothing can use the handle after this.
+            udp?.close()
+            iface?.close()
+            // Both packet loops must have stopped before the handle is freed.
+            receiver?.join()
             Native.free(session)
-            report("Disconnected")
+            report(run, "Disconnected")
         }
     }
 
-    private fun count(sent: Int = 0, received: Int = 0) {
-        packetsSent += sent
-        packetsReceived += received
-        listener?.invoke(lastStatus)
+    private fun sendQuietly(sock: DatagramSocket, bytes: ByteArray): Boolean = try {
+        sock.send(DatagramPacket(bytes, bytes.size))
+        true
+    } catch (_: IOException) {
+        false
     }
 
-    private fun report(status: String) {
+    private fun report(run: Int, status: String) {
+        if (run != generation.get()) return
         lastStatus = status
         listener?.invoke(status)
     }
@@ -140,5 +171,8 @@ class TunnelService : VpnService() {
         @Volatile var packetsSent = 0
         @Volatile var packetsReceived = 0
         @Volatile var listener: ((String) -> Unit)? = null
+
+        private const val INIT_RESEND_MS = 10_000L
+        private val generation = AtomicInteger()
     }
 }

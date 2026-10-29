@@ -9,9 +9,13 @@ object Native {
     /** Returns 0 when [serverPublic] is not a valid server key. */
     @JvmStatic external fun connect(serverPublic: ByteArray): Long
     @JvmStatic external fun initPacket(session: Long): ByteArray
-    @JvmStatic external fun seal(session: Long, ipPacket: ByteArray): ByteArray
+    /** Returns null until the relay's ACK has arrived; drop the packet then. */
+    @JvmStatic external fun seal(session: Long, ipPacket: ByteArray): ByteArray?
 
-    /** Returns null for packets that fail authentication or the replay check. */
+    /**
+     * Returns the IP packet inside a DATA packet, or null for an ACK (handled inside) and for
+     * packets that fail authentication or the replay check.
+     */
     @JvmStatic external fun open(session: Long, packet: ByteArray): ByteArray?
     @JvmStatic external fun free(session: Long)
 }

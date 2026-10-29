@@ -7,11 +7,11 @@ use jni::objects::{JByteArray, JClass};
 use jni::sys::{jbyteArray, jlong};
 use jni::JNIEnv;
 
-use crate::Session;
+use crate::Client;
 
 struct Handle {
-    // Kotlin seals on the TUN-reader thread and opens on the socket-reader thread.
-    session: Mutex<Session>,
+    // Kotlin seals on the TUN-reader thread and receives on the socket-reader thread.
+    client: Mutex<Client>,
     init: Vec<u8>,
 }
 
@@ -33,7 +33,7 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_connect(
 ) -> jlong {
     let Ok(bytes) = env.convert_byte_array(&server_public) else { return 0 };
     match crate::connect(&bytes) {
-        Ok((session, init)) => Box::into_raw(Box::new(Handle { session: Mutex::new(session), init })) as jlong,
+        Ok((client, init)) => Box::into_raw(Box::new(Handle { client: Mutex::new(client), init })) as jlong,
         Err(_) => 0,
     }
 }
@@ -47,6 +47,7 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_initPacket(
     to_java(&mut env, &handle(h).init)
 }
 
+/// Returns null until the server's ACK has arrived.
 #[no_mangle]
 pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_seal(
     mut env: JNIEnv,
@@ -55,11 +56,14 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_seal(
     plain: JByteArray,
 ) -> jbyteArray {
     let Ok(bytes) = env.convert_byte_array(&plain) else { return std::ptr::null_mut() };
-    let packet = handle(h).session.lock().unwrap().seal(&bytes);
-    to_java(&mut env, &packet)
+    match handle(h).client.lock().unwrap().seal(&bytes) {
+        Some(packet) => to_java(&mut env, &packet),
+        None => std::ptr::null_mut(),
+    }
 }
 
-/// Returns null for packets that fail authentication or replay checks; the caller drops them.
+/// Returns the IP packet inside DATA, or null for an ACK (handled here) and for packets that fail
+/// authentication or replay checks; the caller drops those.
 #[no_mangle]
 pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_open(
     mut env: JNIEnv,
@@ -68,9 +72,9 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_open(
     packet: JByteArray,
 ) -> jbyteArray {
     let Ok(bytes) = env.convert_byte_array(&packet) else { return std::ptr::null_mut() };
-    match handle(h).session.lock().unwrap().open(&bytes) {
-        Ok(plain) => to_java(&mut env, &plain),
-        Err(_) => std::ptr::null_mut(),
+    match handle(h).client.lock().unwrap().receive(&bytes) {
+        Ok(Some(plain)) => to_java(&mut env, &plain),
+        _ => std::ptr::null_mut(),
     }
 }
 
