@@ -5,7 +5,7 @@
 use std::sync::{Arc, LazyLock, Mutex};
 
 use jni::objects::{JByteArray, JClass};
-use jni::sys::{jboolean, jbyteArray, jlong, JNI_FALSE};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, JNI_FALSE};
 use jni::JNIEnv;
 
 use crate::handles::Handles;
@@ -93,6 +93,12 @@ pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_open(
 #[no_mangle]
 pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_ready(_: JNIEnv, _: JClass, h: jlong) -> jboolean {
     session(h).map_or(JNI_FALSE, |s| jboolean::from(s.client.lock().unwrap().is_ready()))
+}
+
+/// How many sessions are live; the instrumented tests check that it returns to 0.
+#[no_mangle]
+pub extern "system" fn Java_io_github_rayhungkao_pqtunnel_Native_liveSessions(_: JNIEnv, _: JClass) -> jint {
+    jint::try_from(SESSIONS.len()).unwrap_or(jint::MAX)
 }
 
 /// Freeing twice, or freeing 0, does nothing.

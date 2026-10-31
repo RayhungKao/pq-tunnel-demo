@@ -95,11 +95,16 @@ class TunnelService : VpnService() {
             // must end the run here, not after establish() has brought up tun0.
             val address = InetAddress.getByName(host)
             if (run.stopped) return
+            // "::" and "0.0.0.0" name no host; sending to them would wait for an answer forever.
+            if (address.isAnyLocalAddress) throw IOException("$host is not a relay address")
             val sock = DatagramSocket().also { run.socket = it }
             if (run.stopped) return
             // Keep the tunnel's own packets outside the tunnel, or they would loop back into it.
             protect(sock)
             sock.connect(InetSocketAddress(address, port))
+            // Last check before tun0 comes up. A stop after this point cannot interrupt establish();
+            // the check right after it closes tun0 again at once.
+            if (run.stopped) return
 
             val tunFd = Builder()
                 .setSession("PQ Tunnel Demo")

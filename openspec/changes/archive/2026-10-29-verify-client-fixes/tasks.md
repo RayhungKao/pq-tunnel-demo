@@ -25,7 +25,9 @@ against the fixed code. Instrumented tests ran on the `Pixel_3a_API_32_arm64-v8a
 - [x] 2.1 Poll `tun0`, with the corrected reason in the code comment
 - [x] 2.2 Handle table in `core/src/handles.rs`; JNI and `Native.kt` return null or false for a
   missing handle
-- [x] 2.3 Name lookup before the socket, stopped check after it, no error after a stop
+- [x] 2.3 Name lookup before the socket, stopped check after it, no error after a stop. **Correction:** the
+  "no error after a stop" gate had no test at the time and was not marked "not verified";
+  close-review-gaps adds `aStopDuringTheNameLookupShowsDisconnectedNotTheLookupError`
 - [x] 2.4 Stricter `parseRelay`
 - [x] 2.5 Delete `disconnectDuringNameLookupEndsDisconnected`, which passed with the bug present
 

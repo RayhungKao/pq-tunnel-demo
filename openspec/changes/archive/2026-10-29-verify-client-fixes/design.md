@@ -9,6 +9,11 @@ way it was reproduced is stated next to it. Where something was not reproduced, 
 
 - Every fix in `android/` and `core/` has a test that fails when the fix is reverted, or the bug is
   made impossible by construction.
+
+> **Correction (close-review-gaps):** this goal was not met. The stopped check after the name
+> lookup and the "no error after a stop" gate had neither a test nor a design that made the bug
+> impossible; close-review-gaps adds a test for the gate and records the check as shown by experiment only.
+
 - Docs state only causes that were reproduced.
 
 **Non-Goals:**

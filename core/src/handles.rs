@@ -39,6 +39,11 @@ impl<T> Handles<T> {
         self.lock().live.remove(&id).is_some()
     }
 
+    /// How many handles are live; lets tests notice a session that was never freed.
+    pub fn len(&self) -> usize {
+        self.lock().live.len()
+    }
+
     fn lock(&self) -> MutexGuard<'_, Table<T>> {
         // A panic elsewhere while holding the lock leaves the map itself intact.
         self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -57,6 +62,16 @@ mod tests {
         assert!(table.remove(id));
         assert!(table.get(id).is_none());
         assert!(!table.remove(id), "freeing twice is harmless");
+    }
+
+    #[test]
+    fn len_counts_live_handles() {
+        let table = Handles::new();
+        let a = table.insert(1);
+        table.insert(2);
+        assert_eq!(table.len(), 2);
+        table.remove(a);
+        assert_eq!(table.len(), 1);
     }
 
     #[test]

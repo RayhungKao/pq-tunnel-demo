@@ -24,4 +24,7 @@ object Native {
     /** True once the relay's ACK has arrived and data can flow. */
     @JvmStatic external fun ready(session: Long): Boolean
     @JvmStatic external fun free(session: Long)
+
+    /** How many sessions are live; the instrumented tests check that it returns to 0. */
+    @JvmStatic external fun liveSessions(): Int
 }

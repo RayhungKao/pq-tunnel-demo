@@ -45,6 +45,12 @@ class TunnelServiceTest {
     fun disconnect() {
         stop()
         waitFor { !running() }
+        // Every run frees its native session when it ends; a leak shows up here.
+        val deadline = System.currentTimeMillis() + 5000
+        while (Native.liveSessions() != 0) {
+            check(System.currentTimeMillis() < deadline) { "${Native.liveSessions()} native sessions were never freed" }
+            Thread.sleep(50)
+        }
     }
 
     @Test
@@ -89,8 +95,27 @@ class TunnelServiceTest {
     }
 
     @Test
+    fun anUnspecifiedAddressIsRefused() {
+        for (relay in listOf("[::]:51820", "0.0.0.0:51820")) {
+            connect(relay)
+            waitFor { TunnelService.lastStatus.startsWith("Error:") }
+            stop()
+            waitFor { !running() }
+        }
+    }
+
+    @Test
+    fun aStopDuringTheNameLookupShowsDisconnectedNotTheLookupError() {
+        connect("${unresolvableHost()}:51820")
+        stop()
+        // Long enough for the lookup to fail after the stop.
+        Thread.sleep(5000)
+        assertEquals("Disconnected", TunnelService.lastStatus)
+    }
+
+    @Test
     fun anUnresolvableHostShowsTheErrorAndKeepsIt() {
-        connect("relay.invalid:51820")
+        connect("${unresolvableHost()}:51820")
         waitFor(timeoutMs = 15_000) { TunnelService.lastStatus.startsWith("Error:") }
         Thread.sleep(1500)
         assertTrue(TunnelService.lastStatus, TunnelService.lastStatus.startsWith("Error:"))
@@ -142,6 +167,13 @@ class TunnelServiceTest {
             val fields = File(task, "stat").readText().substringAfterLast(')').trim().split(' ')
             fields[11].toLong() + fields[12].toLong()
         }
+
+    /**
+     * A fresh name under `.invalid` each time. Android caches failed lookups (measured on the
+     * emulator: 124 ms for a new name, 0 ms when repeated), and a cached failure could return
+     * before a stop sent right after Connect is processed.
+     */
+    private fun unresolvableHost() = "relay-${System.nanoTime()}.invalid"
 
     private fun connect(relay: String) {
         context.startService(Intent(context, TunnelService::class.java).putExtra(TunnelService.EXTRA_RELAY, relay))
