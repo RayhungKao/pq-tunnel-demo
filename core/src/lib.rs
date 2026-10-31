@@ -3,9 +3,11 @@
 //! The client knows the server's public keys in advance (pinned) and sends INIT. Only the real
 //! server can derive the shared secrets from it; it answers with ACK, which carries 32 fresh random
 //! bytes and a MAC (a keyed checksum) that proves the server derived them. The traffic keys mix
-//! both shared secrets with that random, so an attacker has to break both X25519 and ML-KEM (the
-//! "hybrid" idea PQConnect uses), and every relay process derives new keys even for a repeated
-//! INIT: a restarted relay never reuses a (key, nonce) pair, and old recordings cannot be replayed.
+//! both shared secrets with that random, so an attacker has to break both X25519 and ML-KEM. (Like
+//! PQConnect, this pairs ECC with post-quantum crypto; PQConnect nests the two encryptions and uses
+//! Classic McEliece, where this concatenates both secrets into one HKDF and uses ML-KEM.) Every
+//! relay process derives new keys even for a repeated INIT: a restarted relay never reuses a
+//! (key, nonce) pair, and old recordings cannot be replayed.
 //!
 //! Packets:
 //!   INIT: [1][client X25519 pub, 32][ML-KEM ciphertext, 1088]

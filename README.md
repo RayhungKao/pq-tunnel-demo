@@ -17,6 +17,7 @@ tunnel. The relay answers only pings to the gateway 10.66.0.1 and forwards nothi
 
 - [Layout](#layout)
 - [What is real, what is simplified](#what-is-real-what-is-simplified)
+- [How this differs from PQConnect](#how-this-differs-from-pqconnect)
 - [Protocol](#protocol)
 - [Design decisions](#design-decisions)
 - [Known limits](#known-limits)
@@ -45,6 +46,26 @@ tunnel. The relay answers only pings to the gateway 10.66.0.1 and forwards nothi
 | Android `VpnService` with a real tun interface and routes | Clients are anonymous; sessions never expire |
 | Rust core cross-compiled for arm64 and x86_64, called over JNI | The relay answers pings to 10.66.0.1 and forwards nothing else |
 | 21 Rust tests, 7 JVM tests and 9 instrumented Android tests, plus checks by hand on an emulator | Android only; an iOS client would reuse the same Rust core |
+
+## How this differs from PQConnect
+
+The PQConnect column summarizes [pqconnect.net](https://www.pqconnect.net) (the Cryptography,
+Security and sysadmin pages).
+
+| | PQConnect | This demo |
+|---|---|---|
+| Post-quantum key exchange | Classic McEliece (`mceliece6960119`): each server has a long-term 1 MB key | ML-KEM-768 |
+| Fast key erasure | The client also encrypts to a short-term server key (Streamlined NTRU Prime, `sntrup761`); goal: each ciphertext is no longer decryptable 2 minutes later | None: no short-term key, no rekeying |
+| Combining with X25519 | Nested encryption | Both shared secrets concatenated into one HKDF |
+| Finding the server and its key | A server name announces PQConnect support in DNS; the server sends its long-term key on request; or a name that includes the server's public key | Key pinned in the APK at build time |
+| Reach | End to end, to any server running PQConnect | One relay |
+| Implementation | Python | Rust core, Kotlin app |
+
+This demo uses ML-KEM-768 because a pure-Rust implementation was at hand (RustCrypto's `ml-kem`)
+and it is the NIST standard (FIPS 203). PQConnect chose otherwise on purpose: its site points to
+the long security record of McEliece, and to the patent situation around lattice schemes such as
+Kyber, the basis of ML-KEM. Moving the core to Classic McEliece and Streamlined NTRU Prime is the
+first item under [Next](#next).
 
 ## Protocol
 
@@ -158,21 +179,36 @@ On purpose, for a demo:
 
 - **No forward secrecy against theft of the server's long-term key.** The server random is sent in
   the clear and the server contributes no ephemeral key, so whoever steals `server.key` can derive
-  recorded sessions. A real protocol (PQConnect included) adds a server ephemeral key and rekeys.
+  recorded sessions. PQConnect adds a short-term server key so that each ciphertext can no longer
+  be decrypted 2 minutes later.
 - **Anonymous clients.** The relay accepts anyone who knows its public key.
 - **No forwarding.** The relay only answers pings to 10.66.0.1. A real relay writes packets to a TUN
   device and NATs them.
 - **Sessions never expire**, and each INIT resend costs the relay one ML-KEM decapsulation. Fine for
   a demo; a real relay drops idle sessions and caches INITs or uses a cookie.
-- **Keys at build time.** `keys/server.pub` is packed into the APK, where PQConnect publishes keys
-  in DNS.
+- **Keys at build time.** `keys/server.pub` is packed into the APK. In PQConnect a server name
+  announces support in DNS and the server sends its long-term key when a client asks for it.
 
 ## Run it
 
 Needs Rust (with the `aarch64-linux-android` and `x86_64-linux-android` targets), `cargo-ndk`,
-JDK 17, and the Android SDK with NDK 27.
+JDK 17, and the Android SDK with NDK 27. Gradle finds the SDK through `ANDROID_HOME`, or through
+`sdk.dir=<path to the SDK>` in `android/local.properties`; on macOS the SDK is usually in
+`~/Library/Android/sdk`:
 
-Run the Rust tests and the Android JVM tests (the second needs `keys/server.pub`, see below):
+```bash
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+```
+
+Generate the server keys first; the Android build needs `keys/server.pub` and stops with a hint
+without it. `server.key` gets mode 600, and a second run refuses to overwrite it, because apps
+built with the old public key would stop working. `keys/` is in `.gitignore`.
+
+```bash
+cargo run -p relay -- keygen keys
+```
+
+Run the Rust tests and the Android JVM tests:
 
 ```bash
 cargo test
@@ -188,13 +224,6 @@ Run the instrumented Android tests on a running emulator or device:
 cd android && ./gradlew connectedDebugAndroidTest
 ```
 
-Generate the server keys once. `server.key` gets mode 600, and a second run refuses to overwrite
-it, because apps built with the old public key would stop working. `keys/` is in `.gitignore`.
-
-```bash
-cargo run -p relay -- keygen keys
-```
-
 Start the relay:
 
 ```bash
@@ -202,7 +231,7 @@ cargo run -p relay -- serve keys 0.0.0.0:51820
 ```
 
 Build and install the app on a running emulator or device. Gradle cross-compiles the Rust core
-first, and stops with a hint if `keys/server.pub` is missing.
+first.
 
 ```bash
 cd android && ./gradlew installDebug
@@ -300,7 +329,9 @@ openspec validate --specs --strict
 
 - iOS: the same `tunnel_core` behind a Swift `NEPacketTunnelProvider` (needs a paid Apple developer
   account for the Network Extension entitlement on devices).
-- A server ephemeral key and rekeying; key discovery over DNS.
+- Match PQConnect's choices: Classic McEliece for the long-term key, Streamlined NTRU Prime for a
+  short-term key with fast erasure, and nested rather than concatenated encryption.
+- Server discovery through DNS announcements, and fetching the server's key on request.
 
 ## License
 
