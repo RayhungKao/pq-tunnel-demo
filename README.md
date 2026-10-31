@@ -125,7 +125,13 @@ The short version:
   once. An error caused by the stop is not shown. `stopSelf(startId)` keeps a Connect that arrived
   after a Disconnect.
 - **Every native session is freed.** `Native.liveSessions()` counts live sessions, and every
-  instrumented test checks that it returns to 0, so a missing `free` fails the suite.
+  instrumented test checks that the count returns to where it was when the test started, so a
+  missing `free` fails the test that leaked.
+- **Tests see only their own run.** The status on screen outlives a run, so each test resets it
+  before connecting and waits for an exact message or for its run to end. A fixed wait is used only
+  to check that something does not change during it, such as the status staying "Waiting", or to
+  let the tunnel sit idle before measuring or stopping it; never to wait until something happened.
+  Two tests used to pass with their bug present by reading the previous run's status.
 - **The status only claims what the client knows.** "Connected" waits for the relay's ACK; before it
   the screen says "Waiting for the relay". An error that ends a connection stays on screen.
 - **Build checks that cannot be skipped.** The `keys/server.pub` check runs first in the Rust build
@@ -220,8 +226,9 @@ the rest of the phone's traffic is untouched.
 37 automated tests. The 9 instrumented tests (and the leak check in their `@After`), the parser
 test for odd input, and two handle-table tests (a freed handle finds nothing; ids are never reused)
 were each run with their fix reverted, and failed. The mutations and results are listed in
-[`verify-client-fixes/tasks.md`](openspec/changes/archive/2026-10-29-verify-client-fixes/tasks.md)
-and [`close-review-gaps/tasks.md`](openspec/changes/archive/2026-10-31-close-review-gaps/tasks.md).
+[`verify-client-fixes/tasks.md`](openspec/changes/archive/2026-10-29-verify-client-fixes/tasks.md),
+[`close-review-gaps/tasks.md`](openspec/changes/archive/2026-10-31-close-review-gaps/tasks.md)
+and [`tests-see-only-their-run/tasks.md`](openspec/changes/archive/2026-10-31-tests-see-only-their-run/tasks.md).
 The Rust protocol and relay tests have not been mutation-checked.
 
 - **Rust core (14), `cargo test`:** the handle table (a freed handle finds nothing, ids are never 0
@@ -239,10 +246,11 @@ The Rust protocol and relay tests have not been mutation-checked.
   relay, a UDP socket on the device that receives the INIT and can send stray datagrams, but cannot
   answer with an ACK. INIT is sent and the status stays "Waiting"; a stray datagram does not make it
   "Connected"; an idle tunnel uses less than 20 ticks of CPU in 2 seconds; an unresolvable host
-  keeps its error on screen; a stop during a failing lookup ends with "Disconnected", not the
-  error; `[::]` and `0.0.0.0` are refused; an IPv6 relay gets the INIT; an idle tunnel disconnects
-  within 2 seconds; ten rounds of quick Connect and Disconnect end cleanly. After each test, every
-  native session must have been freed.
+  keeps its error on screen; a Disconnect right after Connect to an unresolvable name ends with
+  "Disconnected", not the lookup error, however long the lookup takes; `[::]` and `0.0.0.0` are each
+  refused with their own message; an IPv6 relay gets the INIT; an idle tunnel disconnects within 2
+  seconds; ten rounds of quick Connect and Disconnect end cleanly. After each test, the native
+  sessions it created must have been freed within 15 seconds.
 
 Checked by hand on an API 32 arm64 emulator with the real relay:
 
@@ -262,9 +270,12 @@ Checked by hand on an API 32 arm64 emulator with the real relay:
 | Stop after the socket opened, before `establish()` (injected 2-second sleep, experiment) | `establish()` is not called; without the check before it, `establish()` ran after the stop |
 
 Not verified: a failed send during a network switch (the emulator does not make `send` fail), a
-real slow resolver (only an injected sleep), and a physical phone. One instrumented run in an
-independent review failed one test without saying which; 25 further runs (10 on the code, 10 under
-the same mutation, 5 with every host core busy) did not reproduce it.
+real slow resolver (only an injected sleep), and a physical phone. One instrumented run in the
+second independent review failed one test without saying which. A later run named one:
+`anIdleTunnelUsesAlmostNoCpu` read the files of a thread that had just exited (`ENOENT`;
+reproduced in 137 of 3000 reads, fixed in
+[`tests-see-only-their-run`](openspec/changes/archive/2026-10-31-tests-see-only-their-run/design.md)).
+Whether that was the review's failure cannot be confirmed.
 
 ## Specs (OpenSpec)
 

@@ -13,7 +13,11 @@ specified in `openspec/specs/`; changes go through `openspec/changes/<name>/` an
    guards the change. If a bug cannot be tested deterministically, make it impossible by design.
 6. After restoring a mutation or experiment, rebuild before any check by hand: Gradle test tasks
    also rebuild the debug APK, so the APK on disk may still contain the mutation.
-7. Review the diff line by line. Anything not checked is written as "not verified" with the reason.
+7. A test waits for something only its own run can produce: an exact message, or the run having
+   ended. Shared state (the status on screen, a counter) outlives runs; reset it or compare with
+   its value at the start. A fixed sleep is only for checking that something does not change
+   during it, or for letting something sit idle; never for waiting until something has happened.
+8. Review the diff line by line. Anything not checked is written as "not verified" with the reason.
 
 ## Commands
 Environment: `export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:/opt/homebrew/opt/openjdk@17/bin:$PATH" JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=$HOME/Library/Android/sdk`

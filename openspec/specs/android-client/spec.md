@@ -83,9 +83,11 @@ Connect that was requested after it.
 - **WHEN** the user disconnects while the relay name is still being looked up
 - **THEN** neither the socket nor `tun0` is opened, and the screen ends with "Disconnected"
 
-#### Scenario: Disconnect during a lookup that then fails
-- **WHEN** the user connects to `relay.invalid:51820` and disconnects at once
-- **THEN** the screen ends with "Disconnected", not with the lookup error
+#### Scenario: Disconnect right after Connect to a name that cannot be resolved
+- **WHEN** the user connects to a name under `.invalid` and disconnects at once (in the third
+  review's timing logs the stop usually arrived before the lookup started)
+- **THEN** once the run has ended, the screen shows "Disconnected", not the lookup error, however
+  long the lookup took
 
 ### Requirement: Packet counts without flooding the UI thread
 
@@ -174,11 +176,12 @@ error instead of waiting for an answer that cannot come.
 ### Requirement: Every native session is freed
 
 When a connection ends, for any reason, its native session SHALL be freed, so the number of live
-sessions returns to 0 once no connection runs.
+sessions returns to what it was before the connection started.
 
 #### Scenario: After each instrumented test
 - **WHEN** a test has stopped its connection and the status is no longer Waiting or Connected
-- **THEN** the number of live native sessions returns to 0 within 5 seconds
+- **THEN** within 15 seconds the number of live native sessions is no higher than at the start of
+  that test
 
 ### Requirement: A stop near establish()
 

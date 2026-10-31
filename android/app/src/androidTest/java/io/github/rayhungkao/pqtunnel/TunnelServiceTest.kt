@@ -13,6 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -28,9 +29,11 @@ import java.net.InetSocketAddress
 class TunnelServiceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
+    private var liveAtStart = 0
 
     @Before
     fun allowVpn() {
+        liveAtStart = Native.liveSessions()
         // The consent the user gives in the system dialog, granted from the shell instead. Reading
         // the output waits for the command to finish.
         val out = instrumentation.uiAutomation
@@ -45,10 +48,13 @@ class TunnelServiceTest {
     fun disconnect() {
         stop()
         waitFor { !running() }
-        // Every run frees its native session when it ends; a leak shows up here.
-        val deadline = System.currentTimeMillis() + 5000
-        while (Native.liveSessions() != 0) {
-            check(System.currentTimeMillis() < deadline) { "${Native.liveSessions()} native sessions were never freed" }
+        // Every run frees its native session when it ends; a leak shows up here, in the test that
+        // leaked. 15 s, because a stop cannot cut a name lookup short.
+        val deadline = System.currentTimeMillis() + 15_000
+        while (Native.liveSessions() > liveAtStart) {
+            check(System.currentTimeMillis() < deadline) {
+                "${Native.liveSessions() - liveAtStart} native sessions from this test were never freed"
+            }
             Thread.sleep(50)
         }
     }
@@ -96,20 +102,19 @@ class TunnelServiceTest {
 
     @Test
     fun anUnspecifiedAddressIsRefused() {
-        for (relay in listOf("[::]:51820", "0.0.0.0:51820")) {
+        for ((relay, host) in listOf("[::]:51820" to "::", "0.0.0.0:51820" to "0.0.0.0")) {
             connect(relay)
-            waitFor { TunnelService.lastStatus.startsWith("Error:") }
-            stop()
-            waitFor { !running() }
+            waitFor { TunnelService.lastStatus == "Error: $host is not a relay address" }
         }
     }
 
     @Test
-    fun aStopDuringTheNameLookupShowsDisconnectedNotTheLookupError() {
+    fun disconnectRightAfterConnectShowsDisconnectedNotTheLookupError() {
         connect("${unresolvableHost()}:51820")
         stop()
-        // Long enough for the lookup to fail after the stop.
-        Thread.sleep(5000)
+        // Wait for this run to end, however long the lookup takes; a fixed sleep could read the
+        // status before the lookup fails.
+        waitFor(timeoutMs = 15_000) { runEnded() }
         assertEquals("Disconnected", TunnelService.lastStatus)
     }
 
@@ -160,13 +165,18 @@ class TunnelServiceTest {
     }
 
     /** User plus system CPU time, in clock ticks, of this process's threads named "tunnel". */
-    private fun senderCpuTicks(): Long = File("/proc/self/task").listFiles()!!
-        .filter { File(it, "comm").readText().trim() == "tunnel" }
-        .sumOf { task ->
+    private fun senderCpuTicks(): Long = File("/proc/self/task").listFiles()!!.sumOf { task ->
+        // A thread can exit between the listing and the read (measured: 137 of 3000 reads failed
+        // with ENOENT while threads came and went), so a vanished thread counts as 0.
+        try {
+            if (File(task, "comm").readText().trim() != "tunnel") return@sumOf 0L
             // Fields after the ")" that ends the thread name; utime and stime are fields 14 and 15.
             val fields = File(task, "stat").readText().substringAfterLast(')').trim().split(' ')
             fields[11].toLong() + fields[12].toLong()
+        } catch (_: IOException) {
+            0L
         }
+    }
 
     /**
      * A fresh name under `.invalid` each time. Android caches failed lookups (measured on the
@@ -176,6 +186,8 @@ class TunnelServiceTest {
     private fun unresolvableHost() = "relay-${System.nanoTime()}.invalid"
 
     private fun connect(relay: String) {
+        // The status outlives a run. Reset it, so the test only sees what this run reports.
+        TunnelService.lastStatus = NOT_STARTED
         context.startService(Intent(context, TunnelService::class.java).putExtra(TunnelService.EXTRA_RELAY, relay))
     }
 
@@ -184,6 +196,10 @@ class TunnelServiceTest {
     }
 
     private fun running() = TunnelService.lastStatus.let { it.startsWith("Waiting") || it.startsWith("Connected") }
+
+    /** The run started by the last connect() has reported its final status and freed its session. */
+    private fun runEnded() =
+        TunnelService.lastStatus != NOT_STARTED && !running() && Native.liveSessions() <= liveAtStart
 
     private fun fakeRelay(address: String) =
         DatagramSocket(InetSocketAddress(InetAddress.getByName(address), 0)).apply { soTimeout = 5000 }
@@ -201,5 +217,9 @@ class TunnelServiceTest {
             check(System.currentTimeMillis() < deadline) { "timed out; status is \"${TunnelService.lastStatus}\"" }
             Thread.sleep(50)
         }
+    }
+
+    private companion object {
+        const val NOT_STARTED = "(test) not started"
     }
 }
